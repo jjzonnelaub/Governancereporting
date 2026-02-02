@@ -1,0 +1,295 @@
+function getIterationDialogHTML() {
+  const valueStreamCheckboxes = VALUE_STREAMS.map(vs => {
+    const vsId = vs.replace(/[^a-zA-Z0-9]/g, '');
+    return `
+      <div class="checkbox-item" onclick="toggleCheckbox('${vsId}')">
+        <input type="checkbox" id="vs_${vsId}" value="${vs}" onchange="updateSelectAll()">
+        <label for="vs_${vsId}">${vs}</label>
+      </div>
+    `;
+  }).join('');
+
+  return `
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <style>
+          * { box-sizing: border-box; margin: 0; padding: 0; }
+          body { font-family: 'Google Sans', 'Roboto', Arial, sans-serif; padding: 20px; background: #fff; }
+          .container { max-width: 450px; margin: 0 auto; }
+          h2 { color: #1a73e8; margin-bottom: 8px; font-size: 20px; font-weight: 500; }
+          .subtitle { color: #5f6368; font-size: 14px; margin-bottom: 24px; }
+          .section { background: #f8f9fa; border-radius: 8px; padding: 16px; margin-bottom: 20px; }
+          .section-title { color: #3c4043; font-weight: 500; margin-bottom: 12px; font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px; }
+          .input-group { margin-bottom: 16px; }
+          .pi-input, .iteration-select { 
+            width: 100%; 
+            padding: 12px; 
+            font-size: 16px; 
+            border: 2px solid #dadce0; 
+            border-radius: 8px; 
+            transition: border-color 0.2s; 
+            background: white; 
+          }
+          .pi-input:focus, .iteration-select:focus { 
+            outline: none; 
+            border-color: #1a73e8; 
+          }
+          .checkbox-group { 
+            background: white; 
+            border-radius: 8px; 
+            padding: 12px; 
+            max-height: 200px; 
+            overflow-y: auto; 
+          }
+          .checkbox-item { 
+            display: flex; 
+            align-items: center; 
+            padding: 8px; 
+            margin: 2px 0; 
+            border-radius: 6px; 
+            transition: background 0.2s; 
+            cursor: pointer; 
+            user-select: none; 
+          }
+          .checkbox-item:hover { background: #f1f3f4; }
+          .checkbox-item.select-all { 
+            background: #e8f0fe; 
+            margin-bottom: 8px; 
+            border-bottom: 1px solid #dadce0; 
+            font-weight: 500; 
+          }
+          .checkbox-item input[type="checkbox"] { 
+            width: 18px; 
+            height: 18px; 
+            margin-right: 12px; 
+            cursor: pointer; 
+            accent-color: #1a73e8; 
+          }
+          .checkbox-item label { 
+            cursor: pointer; 
+            flex: 1; 
+            color: #3c4043; 
+            font-size: 14px; 
+          }
+          .info-box {
+            background: #e3f2fd;
+            border-left: 3px solid #1976d2;
+            padding: 12px;
+            margin: 16px 0;
+            border-radius: 4px;
+          }
+          .info-box p {
+            color: #1565c0;
+            font-size: 13px;
+            margin: 0;
+          }
+          .button-container { 
+            display: flex; 
+            gap: 12px; 
+            justify-content: flex-end; 
+            margin-top: 24px; 
+          }
+          button { 
+            padding: 10px 24px; 
+            font-size: 14px; 
+            border-radius: 6px; 
+            border: none; 
+            cursor: pointer; 
+            font-weight: 500; 
+            transition: all 0.2s; 
+            font-family: inherit; 
+          }
+          .primary-button { 
+            background: #1a73e8; 
+            color: white; 
+          }
+          .primary-button:hover:not(:disabled) { 
+            background: #1557b0; 
+            box-shadow: 0 1px 3px rgba(0,0,0,0.2); 
+          }
+          .primary-button:disabled { 
+            background: #94c1f5; 
+            cursor: not-allowed; 
+          }
+          .secondary-button { 
+            background: #ffffff; 
+            color: #5f6368; 
+            border: 1px solid #dadce0; 
+          }
+          .secondary-button:hover { background: #f8f9fa; }
+          .error { 
+            color: #d93025; 
+            font-size: 12px; 
+            margin-top: 8px; 
+            display: none; 
+          }
+          .error.show { display: block; }
+          .loading { 
+            display: none; 
+            text-align: center; 
+            padding: 20px; 
+          }
+          .spinner { 
+            border: 3px solid #f3f3f3; 
+            border-top: 3px solid #1a73e8; 
+            border-radius: 50%; 
+            width: 40px; 
+            height: 40px; 
+            animation: spin 1s linear infinite; 
+            margin: 0 auto; 
+          }
+          @keyframes spin { 
+            0% { transform: rotate(0deg); } 
+            100% { transform: rotate(360deg); } 
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <h2>Track Iteration Changes</h2>
+          <div class="subtitle">Analyze what changed during a specific iteration</div>
+          
+          <div class="section">
+            <div class="section-title">Program Increment</div>
+            <div class="input-group">
+              <input type="text" id="piNumber" class="pi-input" 
+                     placeholder="Enter PI number (e.g., 11, 12, 13)" 
+                     autocomplete="off" 
+                     onkeypress="return event.charCode >= 48 && event.charCode <= 57" />
+              <div id="piError" class="error">Please enter a valid PI number</div>
+            </div>
+          </div>
+          
+          <div class="section">
+            <div class="section-title">Iteration</div>
+            <div class="input-group">
+              <select id="iterationNumber" class="iteration-select">
+                <option value="">Select iteration...</option>
+                <option value="0">Iteration 0 (Pre-Planning) 📋</option>
+                <option value="1">Iteration 1 (2 weeks)</option>
+                <option value="2">Iteration 2 (2 weeks)</option>
+                <option value="3">Iteration 3 (2 weeks)</option>
+                <option value="4">Iteration 4 (2 weeks)</option>
+                <option value="5">Iteration 5 (2 weeks)</option>
+                <option value="6">Iteration 6 (3 weeks - IP)</option>
+              </select>
+              <div id="iterationError" class="error">Please select an iteration</div>
+            </div>
+          </div>
+          
+          <div class="section">
+            <div class="section-title">Value Streams</div>
+            <div class="checkbox-group">
+              <div class="checkbox-item select-all" onclick="toggleAll(this)">
+                <input type="checkbox" id="selectAll" onchange="toggleAll(this)">
+                <label for="selectAll">Select All Value Streams</label>
+              </div>
+              ${valueStreamCheckboxes}
+            </div>
+          </div>
+          
+          <div class="info-box">
+            <p>📊 This will analyze all changes made during the selected iteration period plus 3 days after the iteration ends.</p>
+          </div>
+          
+          <div id="loading" class="loading">
+            <div class="spinner"></div>
+            <p style="margin-top: 16px; color: #5f6368;">
+              Analyzing changes...<br>
+              This may take a few moments.
+            </p>
+          </div>
+          
+          <div class="button-container">
+            <button class="secondary-button" onclick="google.script.host.close()">Cancel</button>
+            <button id="analyzeBtn" class="primary-button" onclick="analyzeChanges()">Analyze Changes</button>
+          </div>
+        </div>
+        
+        <script>
+          document.addEventListener('DOMContentLoaded', function() {
+            document.getElementById('piNumber').focus();
+          });
+
+          function toggleCheckbox(vsId) {
+            const checkbox = document.getElementById('vs_' + vsId);
+            if (event.target.type !== 'checkbox') {
+              checkbox.checked = !checkbox.checked;
+            }
+            updateSelectAll();
+          }
+
+          function toggleAll(element) {
+            const selectAll = document.getElementById('selectAll');
+            if (element.tagName === 'DIV') {
+              selectAll.checked = !selectAll.checked;
+            }
+            const checkboxes = document.querySelectorAll('input[type="checkbox"]:not(#selectAll)');
+            checkboxes.forEach(cb => cb.checked = selectAll.checked);
+          }
+
+          function updateSelectAll() {
+            const checkboxes = document.querySelectorAll('input[type="checkbox"]:not(#selectAll)');
+            const selectAll = document.getElementById('selectAll');
+            const checkedCount = Array.from(checkboxes).filter(cb => cb.checked).length;
+            selectAll.checked = checkedCount === checkboxes.length;
+            selectAll.indeterminate = checkedCount > 0 && checkedCount < checkboxes.length;
+          }
+
+          function analyzeChanges() {
+            // Clear previous errors
+            document.querySelectorAll('.error').forEach(el => el.classList.remove('show'));
+            
+            // Validate PI number
+            const piNumber = document.getElementById('piNumber').value.trim();
+            if (!piNumber || isNaN(piNumber)) {
+              document.getElementById('piError').classList.add('show');
+              return;
+            }
+            
+            // Validate iteration
+            const iterationNumber = document.getElementById('iterationNumber').value;
+            if (!iterationNumber) {
+              document.getElementById('iterationError').classList.add('show');
+              return;
+            }
+            
+            // Get selected value streams
+            const checkboxes = document.querySelectorAll('input[type="checkbox"]:not(#selectAll):checked');
+            if (checkboxes.length === 0) {
+              alert('Please select at least one value stream');
+              return;
+            }
+            
+            const selectedValueStreams = Array.from(checkboxes).map(cb => cb.value);
+            const allCheckboxes = document.querySelectorAll('input[type="checkbox"]:not(#selectAll)');
+            const isAllSelected = selectedValueStreams.length === allCheckboxes.length;
+            
+            // Show loading
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('analyzeBtn').disabled = true;
+            
+            // Call server function
+            google.script.run
+              .withSuccessHandler(() => {
+                document.getElementById('loading').style.display = 'none';
+                alert('Change analysis complete! Check the new sheet for results.');
+                google.script.host.close();
+              })
+              .withFailureHandler(err => {
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('analyzeBtn').disabled = false;
+                alert('Error: ' + err);
+              })
+              .analyzeIterationChanges(
+                parseInt(piNumber), 
+                parseInt(iterationNumber), 
+                isAllSelected ? null : selectedValueStreams
+              );
+          }
+        </script>
+      </body>
+    </html>
+  `;
+}
