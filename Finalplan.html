@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <style>
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      body { 
+        font-family: 'Google Sans', 'Roboto', Arial, sans-serif; 
+        padding: 20px; 
+        background: #fff; 
+      }
+      .container { max-width: 450px; margin: 0 auto; }
+      h2 { 
+        color: #1a73e8; 
+        margin-bottom: 8px; 
+        font-size: 20px; 
+        font-weight: 500; 
+      }
+      .subtitle { 
+        color: #5f6368; 
+        font-size: 14px; 
+        margin-bottom: 24px; 
+      }
+      .section { 
+        background: #f8f9fa; 
+        border-radius: 8px; 
+        padding: 16px; 
+        margin-bottom: 20px; 
+      }
+      .section-title { 
+        color: #3c4043; 
+        font-weight: 500; 
+        margin-bottom: 12px; 
+        font-size: 14px; 
+      }
+      .input-group { margin-bottom: 16px; }
+      .select-input, .text-input { 
+        width: 100%; 
+        padding: 12px; 
+        font-size: 16px; 
+        border: 2px solid #dadce0; 
+        border-radius: 8px; 
+        transition: border-color 0.2s; 
+        background: white; 
+      }
+      .select-input:focus, .text-input:focus { 
+        outline: none; 
+        border-color: #1a73e8; 
+      }
+      .info-box {
+       background: #e8f4f8;
+       border-left: 4px solid #1a73e8;
+       padding: 12px;
+       margin: 16px 0;
+       border-radius: 4px;
+       font-size: 13px;
+       color: #1967d2;
+      }
+      .button-container { 
+        display: flex; 
+        gap: 12px; 
+        justify-content: flex-end; 
+        margin-top: 24px; 
+      }
+      button { 
+        padding: 10px 24px; 
+        font-size: 14px; 
+        border-radius: 6px; 
+        border: none; 
+        cursor: pointer; 
+        font-weight: 500; 
+        transition: all 0.2s; 
+      }
+      .primary-button { 
+        background: #1a73e8; 
+        color: white; 
+      }
+      .primary-button:hover:not(:disabled) { 
+        background: #1557b0; 
+      }
+      .primary-button:disabled { 
+        background: #94c1f5; 
+        cursor: not-allowed; 
+      }
+      .secondary-button { 
+        background: #ffffff; 
+        color: #5f6368; 
+        border: 1px solid #dadce0; 
+      }
+      .secondary-button:hover { background: #f8f9fa; }
+      .loading { 
+        display: none; 
+        text-align: center; 
+        padding: 20px; 
+      }
+      .spinner { 
+        border: 3px solid #f3f3f3; 
+        border-top: 3px solid #1a73e8; 
+        border-radius: 50%; 
+        width: 40px; 
+        height: 40px; 
+        animation: spin 1s linear infinite; 
+        margin: 0 auto; 
+      }
+      @keyframes spin { 
+        0% { transform: rotate(0deg); } 
+        100% { transform: rotate(360deg); } 
+      }
+      .radio-group {
+       display: flex;
+       flex-direction: column;
+       gap: 12px;
+      }
+      .radio-option {
+       display: flex;
+       align-items: center;
+       padding: 12px;
+       border: 2px solid #dadce0;
+       border-radius: 8px;
+       cursor: pointer;
+       transition: all 0.2s;
+      }
+      .radio-option:hover {
+       border-color: #1a73e8;
+       background: #f8f9fa;
+      }
+      .radio-option input[type="radio"] {
+       margin-right: 12px;
+       width: 18px;
+       height: 18px;
+       cursor: pointer;
+      }
+      .radio-option label {
+       cursor: pointer;
+       flex: 1;
+       font-size: 14px;
+       color: #3c4043;
+      }
+      .radio-option.selected {
+       border-color: #1a73e8;
+       background: #e8f0fe;
+      }
+      /* NEW: Folder picker styles */
+      .folder-display {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 12px;
+        background: white;
+        border: 2px solid #dadce0;
+        border-radius: 8px;
+        margin-top: 8px;
+      }
+      .folder-display.has-folder {
+        border-color: #34a853;
+        background: #e6f4ea;
+      }
+      .folder-icon {
+        font-size: 20px;
+      }
+      .folder-name {
+        flex: 1;
+        font-size: 14px;
+        color: #3c4043;
+      }
+      .folder-name.placeholder {
+        color: #5f6368;
+        font-style: italic;
+      }
+      .clear-folder {
+        color: #d93025;
+        cursor: pointer;
+        font-size: 18px;
+        display: none;
+      }
+      .folder-display.has-folder .clear-folder {
+        display: block;
+      }
+      .pick-folder-btn {
+        width: 100%;
+        padding: 10px;
+        background: white;
+        color: #1a73e8;
+        border: 2px solid #1a73e8;
+        border-radius: 8px;
+        cursor: pointer;
+        font-size: 14px;
+        font-weight: 500;
+        transition: all 0.2s;
+      }
+      .pick-folder-btn:hover {
+        background: #e8f0fe;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h2>Generate Final Plan Review</h2>
+      <div class="subtitle">Create final plan presentation for one or all value streams</div>
+      
+      <div class="section">
+        <div class="section-title">Select Program Increment</div>
+        <div class="input-group">
+          <select id="piSelect" class="select-input" onchange="populateValueStreams()">
+            <option value="">Loading PIs...</option>
+          </select>
+        </div>
+      </div>
+      
+      <div class="section">
+        <div class="section-title">Select Generation Mode</div>
+        <div class="radio-group">
+          <div class="radio-option" onclick="selectMode('single')">
+            <input type="radio" id="singleMode" name="mode" value="single" checked>
+            <label for="singleMode">
+              <strong>Single Value Stream</strong><br>
+              <small style="color: #5f6368;">Generate for one specific value stream</small>
+            </label>
+          </div>
+          <div class="radio-option" onclick="selectMode('all')">
+            <input type="radio" id="allMode" name="mode" value="all">
+            <label for="allMode">
+              <strong>All Value Streams</strong><br>
+              <small style="color: #5f6368;">Generate all value streams in one document</small>
+            </label>
+          </div>
+        </div>
+      </div>
+      
+      <div class="section" id="vsSection">
+        <div class="section-title">Select Value Stream</div>
+        <div class="input-group">
+          <select id="vsSelect" class="select-input" disabled>
+            <option value="">Select PI first</option>
+          </select>
+        </div>
+      </div>
+      
+      <div class="section">
+        <div class="section-title">Filter by PI Commitment</div>
+        <div class="input-group">
+          <select id="piCommitmentFilter" class="select-input">
+            <option value="All" selected>All (no filter)</option>
+            <option value="Blank">Blank</option>
+            <option value="Committed">Committed</option>
+            <option value="Committed After Plan">Committed After Plan</option>
+          </select>
+        </div>
+        <small style="color: #5f6368; font-size: 12px;">
+          Filter epics based on their PI Commitment status. Default is "All" (no filter).
+        </small>
+      </div>
+      
+      <!-- NEW: Destination Folder Section -->
+      <div class="section">
+        <div class="section-title">📁 Destination Folder (Optional)</div>
+        <button class="pick-folder-btn" onclick="pickFolder()">
+          📂 Choose Folder
+        </button>
+        <div id="folderDisplay" class="folder-display">
+          <span class="folder-icon">📁</span>
+          <span class="folder-name placeholder">Same folder as spreadsheet (default)</span>
+          <span class="clear-folder" onclick="clearFolder()" title="Clear selection">✕</span>
+        </div>
+        <small style="color: #5f6368; font-size: 12px; display: block; margin-top: 8px;">
+          Leave blank to save in the same folder as this spreadsheet
+        </small>
+      </div>
+      
+      <div class="info-box" id="infoBox" style="display: none;"></div>
+      
+      <div class="section">
+        <div class="section-title">Presentation Name (Optional)</div>
+        <div class="input-group">
+          <input type="text" id="presentationName" class="text-input"
+                  placeholder="Auto-generated if left blank" />
+        </div>
+      </div>
+      
+      <div id="loading" class="loading">
+        <div class="spinner"></div>
+        <p style="margin-top: 16px; color: #5f6368;">Generating presentation...</p>
+        <p id="loadingDetail" style="margin-top: 8px; color: #80868b; font-size: 12px;"></p>
+      </div>
+      
+      <div class="button-container">
+        <button class="secondary-button" onclick="google.script.host.close()">Cancel</button>
+        <button id="generateBtn" class="primary-button" onclick="generatePresentation()">Generate</button>
+      </div>
+    </div>
+    
+    <script>
+      let selectedPI = null;
+      let selectedVS = null;
+      let selectedMode = 'single';
+      let allValueStreams = [];
+      let destinationFolderId = null; // NEW: Store selected folder ID
+      let destinationFolderName = null; // NEW: Store selected folder name
+
+      window.onload = function() {
+        loadPIs();
+        loadAllValueStreams(); 
+        
+        updateModeUI();
+        document.querySelectorAll('.radio-option')[0].classList.add('selected');
+      };
+
+      function selectMode(mode) {
+        selectedMode = mode;
+        document.getElementById('singleMode').checked = (mode === 'single');
+        document.getElementById('allMode').checked = (mode === 'all');
+        
+        document.querySelectorAll('.radio-option').forEach(option => {
+          option.classList.remove('selected');
+        });
+        if (mode === 'single') {
+          document.querySelectorAll('.radio-option')[0].classList.add('selected');
+        } else {
+          document.querySelectorAll('.radio-option')[1].classList.add('selected');
+        }
+        
+        updateModeUI();
+        
+        if (selectedPI && selectedMode === 'single') {
+          populateValueStreams();
+        }
+      }
+
+      function updateModeUI() {
+        const vsSection = document.getElementById('vsSection');
+        const infoBox = document.getElementById('infoBox');
+        
+        if (selectedMode === 'all') {
+          vsSection.style.display = 'none';
+          infoBox.style.display = 'block';
+          infoBox.innerHTML = '<strong>📋 All Value Streams Mode</strong><br>Will generate slides for all value streams defined in the Configuration Template.';
+        } else {
+          vsSection.style.display = 'block';
+          infoBox.style.display = 'none';
+        }
+      }
+
+      // NEW: Folder picker functions
+      function pickFolder() {
+        google.script.run
+          .withSuccessHandler(function(result) {
+            if (result && result.id) {
+              destinationFolderId = result.id;
+              destinationFolderName = result.name;
+              updateFolderDisplay();
+            }
+          })
+          .withFailureHandler(function(error) {
+            alert('Error selecting folder: ' + error);
+          })
+          .showFolderPicker();
+      }
+
+      function clearFolder() {
+        destinationFolderId = null;
+        destinationFolderName = null;
+        updateFolderDisplay();
+      }
+
+      function updateFolderDisplay() {
+        const display = document.getElementById('folderDisplay');
+        const nameSpan = display.querySelector('.folder-name');
+        
+        if (destinationFolderId) {
+          display.classList.add('has-folder');
+          nameSpan.classList.remove('placeholder');
+          nameSpan.textContent = destinationFolderName;
+        } else {
+          display.classList.remove('has-folder');
+          nameSpan.classList.add('placeholder');
+          nameSpan.textContent = 'Same folder as spreadsheet (default)';
+        }
+      }
+
+      function loadPIs() {
+        google.script.run
+          .withSuccessHandler(function(pis) {
+            const select = document.getElementById('piSelect');
+            select.innerHTML = '<option value="">-- Select a PI --</option>';
+            
+            if (!pis || pis.length === 0) {
+              select.innerHTML = '<option value="">No PI sheets found</option>';
+              alert('No PI sheets were found. Please make sure your sheets are named "PI {number} - Iteration 1" (e.g., "PI 13 - Iteration 1").');
+              return;
+            }
+
+            pis.forEach(pi => {
+              const option = document.createElement('option');
+              option.value = pi;
+              option.textContent = 'PI ' + pi;
+              select.appendChild(option);
+            });
+          })
+          .withFailureHandler(function(error) {
+            console.error('Error loading PIs:', error);
+            const select = document.getElementById('piSelect');
+            select.innerHTML = '<option value="">Error loading PIs</option>';
+            alert('Error loading PIs: ' + error + '. Make sure sheets named "PI {number} - Iteration 1" exist.');
+          })
+          .getAvailablePIsForValueStream();
+      }
+
+      function loadAllValueStreams() {
+        google.script.run
+          .withSuccessHandler(function(streams) {
+            allValueStreams = streams || [];
+            if (selectedPI && selectedMode === 'single') {
+              populateValueStreams();
+            }
+          })
+          .withFailureHandler(function(error) {
+            console.error('Error loading value streams:', error);
+            allValueStreams = [];
+          })
+          .getAvailableValueStreams(0);
+      }
+
+      function populateValueStreams() {
+        const piSelect = document.getElementById('piSelect');
+        const vsSelect = document.getElementById('vsSelect');
+        selectedPI = piSelect.value;
+        
+        if (!selectedPI) {
+          vsSelect.innerHTML = '<option value="">Select PI first</option>';
+          vsSelect.disabled = true;
+          return;
+        }
+        
+        if (selectedMode === 'all') {
+          vsSelect.innerHTML = '<option value="">N/A (All Streams)</option>';
+          vsSelect.disabled = true;
+          return;
+        }
+        
+        vsSelect.disabled = true;
+        vsSelect.innerHTML = '<option value="">-- Select a Value Stream --</option>';
+
+        if (allValueStreams.length > 0) {
+          allValueStreams.forEach(vs => {
+            const option = document.createElement('option');
+            option.value = vs;
+            option.textContent = vs;
+            vsSelect.appendChild(option);
+          });
+          vsSelect.disabled = false;
+        } else {
+          vsSelect.innerHTML = '<option value="">No value streams found in Configuration Template</option>';
+        }
+      }
+
+      function generatePresentation() {
+        const piSelect = document.getElementById('piSelect');
+        const vsSelect = document.getElementById('vsSelect');
+        const nameField = document.getElementById('presentationName');
+        const piCommitmentFilter = document.getElementById('piCommitmentFilter');
+        
+        if (!piSelect.value) {
+          alert('Please select a PI');
+          return;
+        }
+        
+        if (selectedMode === 'single' && !vsSelect.value) {
+          alert('Please select a Value Stream');
+          return;
+        }
+        
+        document.getElementById('loading').style.display = 'block';
+        document.getElementById('generateBtn').disabled = true;
+        document.getElementById('loadingDetail').textContent = '';
+        
+        const valueStream = selectedMode === 'all' ? 'ALL' : vsSelect.value;
+        
+        if (selectedMode === 'all') {
+          document.getElementById('loadingDetail').textContent = 
+            'Processing all value streams from Configuration Template... This may take a few minutes.';
+        } else {
+           document.getElementById('loadingDetail').textContent = 
+            `Processing ${valueStream}...`;
+        }
+        
+        // UPDATED: Now passes destination folder ID as 6th parameter
+        google.script.run
+          .withSuccessHandler(function(result) {
+            document.getElementById('loading').style.display = 'none';
+            
+            if (result && result.success) {
+              let message = 'Presentation created successfully!\n\n';
+              if (result.valueStreams) {
+                message += 'Value Streams Processed: ' + result.valueStreams + '\n';
+              }
+              message += 'Total Slides: ' + result.slideCount + '\n';
+              if (destinationFolderName) {
+                message += 'Saved to: ' + destinationFolderName + '\n';
+              }
+              message += '\nOpening in new window...';
+              
+              alert(message);
+              window.open(result.url, '_blank');
+              google.script.host.close();
+            }
+          })
+          .withFailureHandler(function(error) {
+            document.getElementById('loading').style.display = 'none';
+            document.getElementById('generateBtn').disabled = false;
+            alert('Error: ' + error);
+          })
+          .generateValueStreamPresentation(
+            valueStream,                         // 1. valueStream
+            parseInt(piSelect.value),            // 2. piNumber
+            'FINAL',                             // 3. phase
+            nameField.value.trim() || null,      // 4. presentationId
+            piCommitmentFilter.value,            // 5. piCommitmentFilter
+            destinationFolderId                  // 6. destinationFolderId (NEW)
+          );
+      }
+    </script>
+  </body>
+</html>

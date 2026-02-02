@@ -1,0 +1,341 @@
+/**
+ * JIRA Field Metadata Configuration Script
+ * Fetches and displays metadata for custom fields in a Configuration tab
+ */
+
+// ===== FIELD CONFIGURATION =====
+const METADATA_FIELDS = {
+  'Program Increment': 'customfield_10113',
+  'PI Commitment': 'customfield_10063',
+  'Value Stream/Org': 'customfield_10046',
+  'Scrum Team': 'customfield_10040',
+  'Portfolio Initiative': 'customfield_10049',
+  'Program Initiative': 'customfield_10050',
+  'Allocation': 'customfield_10043',
+  'RAG': 'customfield_10068'
+};
+
+// ===== MENU ADDITIONS =====
+/**
+ * Add this to your existing onOpen() function:
+ * .addItem('🔄 Refresh Field Metadata', 'refreshFieldMetadata')
+ */
+
+/**
+ * Main function to refresh field metadata in Configuration tab
+ */
+function refreshFieldMetadata() {
+return logActivity('JIRA Field Configuration Refresh', () => {
+  const ui = SpreadsheetApp.getUi();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  
+  try {
+    ss.toast('Fetching field metadata from JIRA...', '⏳ Loading', 10);
+    
+    // Fetch metadata for all configured fields
+    const metadataResults = fetchAllFieldMetadata();
+    
+    // Write to Configuration sheet
+    writeMetadataToSheet(metadataResults);
+    
+    ss.toast('✅ Field metadata refreshed successfully!', '✅ Complete', 5);
+    
+  } catch (error) {
+    console.error('Error refreshing field metadata:', error);
+    ui.alert('Error', `Failed to refresh field metadata: ${error.message}`, ui.ButtonSet.OK);
+  }
+ }, {});
+}
+
+/**
+ * Fetches metadata for all configured custom fields
+ */
+function fetchAllFieldMetadata() {
+  const jiraConfig = getJiraConfig();
+  const results = {};
+  
+  console.log('Fetching field metadata from JIRA...');
+  
+  // Fetch all field definitions from JIRA
+  const url = `${jiraConfig.baseUrl}/rest/api/3/field`;
+  
+  try {
+    const response = UrlFetchApp.fetch(url, {
+      method: 'GET',
+      headers: getJiraHeaders(),
+      muteHttpExceptions: true
+    });
+    
+    if (response.getResponseCode() !== 200) {
+      throw new Error(`JIRA API error: ${response.getResponseCode()} - ${response.getContentText()}`);
+    }
+    
+    const allFields = JSON.parse(response.getContentText());
+    
+    // For each configured field, find its metadata and get allowed values
+    Object.keys(METADATA_FIELDS).forEach(fieldName => {
+      const fieldId = METADATA_FIELDS[fieldName];
+      const fieldDef = allFields.find(f => f.id === fieldId);
+      
+      if (fieldDef) {
+        console.log(`Found metadata for ${fieldName} (${fieldId})`);
+        
+        // Get allowed values if it's a select/multi-select field
+        const allowedValues = fetchFieldAllowedValues(fieldId, fieldDef);
+        
+        results[fieldName] = {
+          fieldId: fieldId,
+          fieldType: fieldDef.schema ? fieldDef.schema.type : 'unknown',
+          allowedValues: allowedValues
+        };
+      } else {
+        console.warn(`Field ${fieldName} (${fieldId}) not found in JIRA`);
+        results[fieldName] = {
+          fieldId: fieldId,
+          fieldType: 'not found',
+          allowedValues: []
+        };
+      }
+    });
+    
+  } catch (error) {
+    console.error('Error fetching field metadata:', error);
+    throw error;
+  }
+  
+  return results;
+}
+
+/**
+ * Fetches allowed values for a specific field using multiple strategies
+ */
+function fetchFieldAllowedValues(fieldId, fieldDef) {
+  const jiraConfig = getJiraConfig();
+  let allowedValues = [];
+  
+  // Check if this is a field type that has allowed values
+  const fieldType = fieldDef.schema ? fieldDef.schema.type : null;
+  
+  if (!fieldType || !['option', 'array'].includes(fieldType)) {
+    return allowedValues;
+  }
+  
+  console.log(`Fetching allowed values for ${fieldId}...`);
+  
+  // Strategy 1: Try the custom field context endpoint (more efficient)
+  try {
+    const contextUrl = `${jiraConfig.baseUrl}/rest/api/3/field/${fieldId}/context`;
+    
+    const contextResponse = UrlFetchApp.fetch(contextUrl, {
+      method: 'GET',
+      headers: getJiraHeaders(),
+      muteHttpExceptions: true
+    });
+    
+    if (contextResponse.getResponseCode() === 200) {
+      const contexts = JSON.parse(contextResponse.getContentText());
+      
+      if (contexts.values && contexts.values.length > 0) {
+        const contextId = contexts.values[0].id;
+        
+        // Now fetch the options for this context
+        const optionsUrl = `${jiraConfig.baseUrl}/rest/api/3/field/${fieldId}/context/${contextId}/option`;
+        
+        const optionsResponse = UrlFetchApp.fetch(optionsUrl, {
+          method: 'GET',
+          headers: getJiraHeaders(),
+          muteHttpExceptions: true
+        });
+        
+        if (optionsResponse.getResponseCode() === 200) {
+          const options = JSON.parse(optionsResponse.getContentText());
+          
+          if (options.values) {
+            options.values.forEach(opt => {
+              const value = opt.value || opt.name;
+              if (value && !allowedValues.includes(value)) {
+                allowedValues.push(value);
+              }
+            });
+            
+            console.log(`Found ${allowedValues.length} values using context endpoint`);
+            return allowedValues;
+          }
+        }
+      }
+    }
+  } catch (error) {
+    console.warn(`Context endpoint failed for ${fieldId}: ${error.message}`);
+  }
+  
+  // Strategy 2: Query actual issues to find unique values
+  try {
+    console.log(`Trying issue search for ${fieldId}...`);
+    
+    // Search for issues that have this field populated
+    const searchUrl = `${jiraConfig.baseUrl}/rest/api/3/search/jql`;
+    const jql = `${fieldId} is not EMPTY ORDER BY created DESC`;
+    
+    const searchResponse = UrlFetchApp.fetch(`${searchUrl}?jql=${encodeURIComponent(jql)}&maxResults=100&fields=${fieldId}`, {
+      method: 'GET',
+      headers: getJiraHeaders(),
+      muteHttpExceptions: true
+    });
+    
+    if (searchResponse.getResponseCode() === 200) {
+      const searchData = JSON.parse(searchResponse.getContentText());
+      
+      if (searchData.issues) {
+        const uniqueValues = new Set();
+        
+        searchData.issues.forEach(issue => {
+          const fieldValue = issue.fields[fieldId];
+          
+          if (fieldValue) {
+            let value = null;
+            
+            if (typeof fieldValue === 'string') {
+              value = fieldValue;
+            } else if (fieldValue.value) {
+              value = fieldValue.value;
+            } else if (fieldValue.name) {
+              value = fieldValue.name;
+            } else if (Array.isArray(fieldValue)) {
+              fieldValue.forEach(v => {
+                const arrValue = v.value || v.name || v.toString();
+                if (arrValue) uniqueValues.add(arrValue);
+              });
+            }
+            
+            if (value) {
+              uniqueValues.add(value);
+            }
+          }
+        });
+        
+        allowedValues = Array.from(uniqueValues).sort();
+        console.log(`Found ${allowedValues.length} unique values from issues`);
+      }
+    }
+    
+  } catch (error) {
+    console.warn(`Issue search failed for ${fieldId}: ${error.message}`);
+  }
+  
+  return allowedValues;
+}
+
+/**
+ * Writes metadata to the Configuration sheet
+ */
+function writeMetadataToSheet(metadataResults) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName('Configuration');
+  
+  // Create Configuration sheet if it doesn't exist
+  if (!sheet) {
+    sheet = ss.insertSheet('Configuration');
+    sheet.getRange(1, 1, sheet.getMaxRows(), sheet.getMaxColumns())
+      .setFontFamily('Comfortaa');
+    sheet.getRange(1, 1)
+      .setValue('JIRA Field Configuration')
+      .setFontSize(16)
+      .setFontWeight('bold');
+    sheet.getRange(2, 1)
+      .setValue('Field metadata from JIRA')
+      .setFontStyle('italic')
+      .setFontSize(10);
+  } else {
+    // Clear existing data (except title)
+    const lastRow = sheet.getLastRow();
+    if (lastRow > 3) {
+      sheet.getRange(4, 1, lastRow - 3, sheet.getMaxColumns()).clear();
+    }
+  }
+  
+  // Add timestamp
+  const timestamp = new Date().toLocaleString();
+  sheet.getRange(3, 1)
+    .setValue(`Last refreshed: ${timestamp}`)
+    .setFontStyle('italic')
+    .setFontSize(9)
+    .setFontColor('#666666');
+  
+  // Write headers
+  sheet.getRange(4, 1, 1, 2)
+    .setValues([['Field Name', 'Allowed Values']])
+    .setFontWeight('bold')
+    .setBackground('#9b7bb8')
+    .setFontColor('white');
+  
+  // Write data
+  let currentRow = 5;
+  Object.keys(metadataResults).forEach(fieldName => {
+    const metadata = metadataResults[fieldName];
+    const allowedValues = metadata.allowedValues;
+    
+    if (allowedValues.length === 0) {
+      // No values - just write the field name
+      sheet.getRange(currentRow, 1).setValue(fieldName);
+      sheet.getRange(currentRow, 2).setValue('(no predefined values)');
+      currentRow++;
+    } else {
+      // Write each allowed value as a separate row
+      allowedValues.forEach((value, index) => {
+        if (index === 0) {
+          // First row includes the field name
+          sheet.getRange(currentRow, 1).setValue(fieldName);
+        } else {
+          // Subsequent rows leave field name blank
+          sheet.getRange(currentRow, 1).setValue('');
+        }
+        sheet.getRange(currentRow, 2).setValue(value);
+        currentRow++;
+      });
+    }
+  });
+  
+  // Format the sheet
+  sheet.setFrozenRows(4);
+  sheet.setColumnWidth(1, 200);
+  sheet.setColumnWidth(2, 300);
+  
+  // Add borders
+  const dataRange = sheet.getRange(4, 1, currentRow - 4, 2);
+  dataRange.setBorder(true, true, true, true, true, true);
+  
+  // Alternate row colors for readability
+  for (let row = 5; row < currentRow; row++) {
+    if ((row - 5) % 2 === 0) {
+      sheet.getRange(row, 1, 1, 2).setBackground('#f3f3f3');
+    }
+  }
+  
+  console.log(`Configuration sheet updated with ${Object.keys(metadataResults).length} fields`);
+}
+
+/**
+ * Alternative: Fetch metadata for a single field (utility function)
+ */
+function getFieldMetadata(fieldId) {
+  const jiraConfig = getJiraConfig();
+  const url = `${jiraConfig.baseUrl}/rest/api/3/field/${fieldId}`;
+  
+  try {
+    const response = UrlFetchApp.fetch(url, {
+      method: 'GET',
+      headers: getJiraHeaders(),
+      muteHttpExceptions: true
+    });
+    
+    if (response.getResponseCode() === 200) {
+      return JSON.parse(response.getContentText());
+    } else {
+      console.error(`Failed to fetch metadata for ${fieldId}: ${response.getContentText()}`);
+      return null;
+    }
+  } catch (error) {
+    console.error(`Error fetching field metadata: ${error.message}`);
+    return null;
+  }
+}

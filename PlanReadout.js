@@ -1,0 +1,1098 @@
+/**
+ * =================================================================
+ * PI Readout Summarizer (Controller) - ENHANCED WITH INITIATIVE CONTEXT
+ * =================================================================
+ * Orchestrates the generation of both Business and Technical summaries
+ * by analyzing initiative hierarchy and PI-specific epic goals.
+ * 
+ * Key enhancements:
+ * - Understands initiative → epic parent-child relationships
+ * - Incorporates initiative-level context (Title, Description)
+ * - Summarizes what will be accomplished in THIS PI
+ * - Handles epics without initiatives gracefully
+ */
+function generateEpicPerspectives() {
+  return logActivity('Epic-Level Perspectives', () => {
+    const ui = SpreadsheetApp.getUi();
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.getActiveSheet();
+
+    const sheetName = sheet.getName();
+    if (!sheetName.includes('Governance') && !sheetName.match(/PI \d+ - Iteration \d+/)) {
+      ui.alert('Error', 'Please run this function on a valid report sheet.', ui.ButtonSet.OK);
+      return;
+    }
+    
+    ss.toast('Starting epic-level perspective generation...', '🔍 Analyzing Sheet', 10);
+    const headerRow = 4;
+
+    try {
+      const COLUMN_MAPPINGS = {
+        key: ['Key'],
+        parentKey: ['Parent Key'],
+        issueType: ['Issue Type'],
+        summary: ['Summary'],
+        piObjective: ['PI Objective'],
+        benefitHypothesis: ['Benefit Hypothesis'],
+        acceptanceCriteria: ['Acceptance Criteria'],
+        initiativeTitle: ['Initiative Title'],
+        initiativeDescription: ['Initiative Description']
+      };
+      
+      let headers = sheet.getRange(headerRow, 1, 1, sheet.getLastColumn()).getValues()[0].map(h => h.trim());
+      const dataValues = sheet.getRange(headerRow + 1, 1, sheet.getLastRow() - headerRow, sheet.getLastColumn()).getValues();
+
+      // Business Perspective Job
+      const businessJob = {
+        newColumnHeader: 'Business Perspective',
+        summaryPrompt: `Create a ONE-SENTENCE executive summary (maximum 20 words).
+
+INSTRUCTIONS:
+Write a concise summary explaining the business value and what will be delivered.
+
+STRICT RULES:
+- EXACTLY ONE SENTENCE (no periods until the end)
+- MAXIMUM 20 WORDS - this is non-negotiable
+- Start with the subject: "The initiative...", "We are delivering...", "The team will implement..."
+- Focus on business outcome, not process
+- NO phrases like: "This PI will", "In this PI", "This work will focus on"
+
+STRUCTURE:
+[Subject] + [action verb] + [what's being delivered] + [business value]
+
+Example (18 words): "The initiative modernizes payment processing to reduce transaction failures by 40% and improve customer satisfaction."
+
+If no initiative exists, summarize the epic's business value in one sentence under 20 words.
+If you cannot process the input, return "N/A"
+If input is empty, return "N/A"
+
+CRITICAL: Count your words before responding. If over 20 words, revise until under 20.`,
+        sourceColumns: ['key', 'parentKey', 'summary', 'piObjective', 'benefitHypothesis', 'acceptanceCriteria', 'initiativeTitle', 'initiativeDescription'],
+        filterColumn: 'issueType',
+        filterValue: 'Epic'
+      };
+      
+      // Technical Perspective Job
+      const technicalJob = {
+        newColumnHeader: 'Technical Perspective',
+        summaryPrompt: `Create a 2-3 sentence executive technical summary.
+
+INSTRUCTIONS:
+Write a concise summary explaining what is being built technically.
+
+CRITICAL RULES:
+- EXACTLY ONE SENTENCE
+- MAXIMUM 20 WORDS - count before responding
+- Start with: "The feature...", "The system...", "The platform...", "This work..."
+- NEVER use: "This PI will", "In this PI", "Engineer will", "Engineers are", "We will", "The team will"
+- Use present tense: "delivers", "builds", "integrates", "establishes"
+- NO reference to "Epic" or "Initiative" - use "feature" or "program"
+- If any fields that we are pulling to read is blank ignore and process with the fields that contain data
+
+EXAMPLE (15 words): "The feature integrates OAuth authentication with legacy systems to improve security and user experience."
+
+If input is empty, return 'N/A'.`,
+        sourceColumns: ['key', 'parentKey', 'summary', 'piObjective', 'benefitHypothesis', 'acceptanceCriteria', 'initiativeTitle', 'initiativeDescription'],
+        filterColumn: 'issueType',
+        filterValue: 'Epic'
+      };
+      
+      // Execute
+      ss.toast('Step 1/2: Generating Business Perspective...', '🤖 AI Processing', 5);
+      generateEnhancedPIReadoutHelper(ss, ui, sheet, headers, dataValues, headerRow, COLUMN_MAPPINGS, businessJob);
+      
+      ss.toast('Step 2/2: Generating Technical Perspective...', '🤖 AI Processing', 5);
+      headers = sheet.getRange(headerRow, 1, 1, sheet.getLastColumn()).getValues()[0].map(h => h.trim());
+      generateEnhancedPIReadoutHelper(ss, ui, sheet, headers, dataValues, headerRow, COLUMN_MAPPINGS, technicalJob);
+      
+      ss.toast('✅ Epic-level perspectives complete! Now run "Generate Initiative Perspectives"', '✅ Success', 10);
+
+    } catch (error) {
+      console.error('Epic Perspective Error:', error);
+      ui.alert('An Error Occurred', error.toString(), ui.ButtonSet.OK);
+    }
+  }, { sheetName: SpreadsheetApp.getActiveSheet().getName() });
+}
+function generateInitiativePerspectives() {
+  return logActivity('Initiative-Level Perspectives', () => {
+    const ui = SpreadsheetApp.getUi();
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.getActiveSheet();
+
+    const sheetName = sheet.getName();
+    if (!sheetName.includes('Governance') && !sheetName.match(/PI \d+ - Iteration \d+/)) {
+      ui.alert('Error', 'Please run this function on a valid report sheet.', ui.ButtonSet.OK);
+      return;
+    }
+    
+    // Verify prerequisites
+    let headers = sheet.getRange(4, 1, 1, sheet.getLastColumn()).getValues()[0].map(h => h.trim());
+    
+    if (headers.indexOf('Business Perspective') === -1 || headers.indexOf('Technical Perspective') === -1) {
+      ui.alert('Missing Prerequisites', 
+        'Please run "Generate Epic Perspectives" first!\n\nThis function requires the Business Perspective and Technical Perspective columns to already exist.', 
+        ui.ButtonSet.OK);
+      return;
+    }
+    
+    ss.toast('Starting initiative-level perspective generation...', '🔍 Analyzing Sheet', 10);
+    const headerRow = 4;
+
+    try {
+      const COLUMN_MAPPINGS = {
+        key: ['Key'],
+        parentKey: ['Parent Key'],
+        issueType: ['Issue Type'],
+        summary: ['Summary'],
+        piObjective: ['PI Objective'],
+        benefitHypothesis: ['Benefit Hypothesis'],
+        acceptanceCriteria: ['Acceptance Criteria'],
+        initiativeTitle: ['Initiative Title'],
+        initiativeDescription: ['Initiative Description']
+      };
+      
+      const dataValues = sheet.getRange(headerRow + 1, 1, sheet.getLastRow() - headerRow, sheet.getLastColumn()).getValues();
+
+      // Generate BOTH merged perspectives in one call (matches your current code)
+      ss.toast('Generating merged perspectives...', '🤖 AI Processing', 5);
+      generateMergedInitiativePerspectives(ss, sheet, headers, dataValues, headerRow, COLUMN_MAPPINGS);
+      
+      ss.toast('✅ Initiative-level perspectives complete!', '✅ Success', 10);
+
+    } catch (error) {
+      console.error('Initiative Perspective Error:', error);
+      ui.alert('An Error Occurred', error.toString(), ui.ButtonSet.OK);
+    }
+  }, { sheetName: SpreadsheetApp.getActiveSheet().getName() });
+}
+function summarizePlanReadout() {
+ return logActivity('Business & Technical Perspective Summary', () => {
+  const ui = SpreadsheetApp.getUi();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getActiveSheet();
+
+  const sheetName = sheet.getName();
+  if (!sheetName.includes('Governance') && !sheetName.match(/PI \d+ - Iteration \d+/)) {
+    ui.alert('Error', 'Please run this function on a valid report sheet.', ui.ButtonSet.OK);
+    return;
+  }
+  
+  ss.toast('Starting Plan Readout summary generation with initiative context...', '🔍 Analyzing Sheet', 10);
+  const headerRow = 4;
+
+  try {
+    // --- 1. DEFINE ENHANCED COLUMN MAPPINGS ---
+    const COLUMN_MAPPINGS = {
+      key: ['Key'],
+      parentKey: ['Parent Key'],
+      issueType: ['Issue Type'],
+      summary: ['Summary'],
+      piObjective: ['PI Objective'],
+      benefitHypothesis: ['Benefit Hypothesis'],
+      acceptanceCriteria: ['Acceptance Criteria'],
+      initiativeTitle: ['Initiative Title'],
+      initiativeDescription: ['Initiative Description']
+    };
+    
+    let headers = sheet.getRange(headerRow, 1, 1, sheet.getLastColumn()).getValues()[0].map(h => h.trim());
+    const dataValues = sheet.getRange(headerRow + 1, 1, sheet.getLastRow() - headerRow, sheet.getLastColumn()).getValues();
+
+    // --- 2. DEFINE "BUSINESS PERSPECTIVE" JOB (EPIC-LEVEL) ---
+    const businessJob = {
+      newColumnHeader: 'Business Perspective',
+      summaryPrompt: `Create a ONE-SENTENCE executive summary (maximum 20 words).
+
+INSTRUCTIONS:
+1. First sentence: State the initiative's overall business goal
+2. Second sentence: Describe what will be delivered and its business value
+3. Third sentence (optional): Note key success criteria or outcomes
+
+STRICT RULES:
+- EXACTLY ONE SENTENCE (no periods until the end)
+- MAXIMUM 20 WORDS - this is non-negotiable
+- Start with the subject: "The initiative...", "We are delivering...", "The team will implement..."
+- Focus on business outcome, not process
+- NO phrases like: "This PI will", "In this PI", "This work will focus on"
+- If any fields that we are pulling to read is blank ignore and process with the fields that contain data
+
+STRUCTURE:
+[Subject] + [action verb] + [what's being delivered] + [business value]
+
+Example (18 words): "The initiative modernizes payment processing to reduce transaction failures by 40% and improve customer satisfaction."
+
+If no initiative exists, summarize the epic's business value in one sentence under 20 words.
+If you cannot process the input, return "N/A"
+If input is empty, return "N/A"
+
+CRITICAL: Count your words before responding. If over 20 words, revise until under 20.`,
+      sourceColumns: ['key', 'parentKey', 'summary', 'piObjective', 'benefitHypothesis', 'acceptanceCriteria', 'initiativeTitle', 'initiativeDescription'],
+      filterColumn: 'issueType',
+      filterValue: 'Epic'
+    };
+    
+    // --- 3. DEFINE "TECHNICAL PERSPECTIVE" JOB (EPIC-LEVEL) ---
+    const technicalJob = {
+      newColumnHeader: 'Technical Perspective',
+      summaryPrompt: `Create a 2-3 sentence executive technical summary for a program governance presentation.
+
+INSTRUCTIONS:
+1. First sentence: State the initiative's overall technical goal
+2. Second sentence: Describe specific engineering work and deliverables
+3. Third sentence (optional): Note completion criteria or technical outcomes
+
+CRITICAL RULES:
+- EXACTLY ONE SENTENCE
+- MAXIMUM 20 WORDS - count before responding
+- Start with: "The feature...", "The system...", "The platform...", "This work..."
+- NEVER use: "This PI will", "In this PI", "Engineer will", "Engineers are", "Engineers will", "We will", "The team will", "The focus is"
+- Use present tense: "delivers", "builds", "integrates", "establishes", "provides"
+- NO reference to "Epic" or "Initiative" - use "feature" or "program"
+- If cannot process, return PI Objective trimmed to 15 words with asterisk
+- If any fields that we are pulling to read is blank ignore and process with the fields that contain data
+
+EXAMPLE GOOD STARTS:
+- "The feature establishes cloud-native authentication for enterprise users..."
+- "The system integrates OAuth 2.0 with existing infrastructure..."
+- "The platform delivers microservices architecture for patient data..."
+
+
+If input is empty, return 'N/A'.`,
+      sourceColumns: ['key', 'parentKey', 'summary', 'piObjective', 'benefitHypothesis', 'acceptanceCriteria', 'initiativeTitle', 'initiativeDescription'],
+      filterColumn: 'issueType',
+      filterValue: 'Epic'
+    };
+    
+    // --- 4. EXECUTE EPIC-LEVEL JOBS (IN ORDER) ---
+    ss.toast('Step 1/4: Generating Business Perspective (epic-level)...', '🤖 AI Processing', 5);
+    generateEnhancedPIReadoutHelper(ss, ui, sheet, headers, dataValues, headerRow, COLUMN_MAPPINGS, businessJob);
+    
+    // RE-READ HEADERS after Business Perspective column is added
+    headers = sheet.getRange(headerRow, 1, 1, sheet.getLastColumn()).getValues()[0].map(h => h.trim());
+    console.log(`Headers after Business Perspective: ${headers.length} columns`);
+    
+    ss.toast('Step 2/4: Generating Technical Perspective (epic-level)...', '🤖 AI Processing', 5);
+    generateEnhancedPIReadoutHelper(ss, ui, sheet, headers, dataValues, headerRow, COLUMN_MAPPINGS, technicalJob);
+    
+    // RE-READ HEADERS after Technical Perspective column is added
+    headers = sheet.getRange(headerRow, 1, 1, sheet.getLastColumn()).getValues()[0].map(h => h.trim());
+    console.log(`Headers after Technical Perspective: ${headers.length} columns`);
+    
+    // --- 5. GENERATE MERGED INITIATIVE-LEVEL PERSPECTIVES (IN ORDER) ---
+    ss.toast('Step 3/4: Generating Merged Business Perspective (initiative-level)...', '🤖 AI Processing', 5);
+    generateMergedInitiativePerspectives(ss, sheet, headers, dataValues, headerRow, COLUMN_MAPPINGS, 'Business');
+    
+    // RE-READ HEADERS after Merged Business Perspective column is added
+    headers = sheet.getRange(headerRow, 1, 1, sheet.getLastColumn()).getValues()[0].map(h => h.trim());
+    console.log(`Headers after Merged Business Perspective: ${headers.length} columns`);
+    
+    ss.toast('Step 4/4: Generating Merged Technical Perspective (initiative-level)...', '🤖 AI Processing', 5);
+    generateMergedInitiativePerspectives(ss, sheet, headers, dataValues, headerRow, COLUMN_MAPPINGS, 'Technical');
+    
+    ss.toast('✅ Plan Readout generation complete!', '✅ Success', 8);
+
+  } catch (error) {
+    console.error('Plan Readout Error:', error);
+    ui.alert('An Error Occurred', error.toString(), ui.ButtonSet.OK);
+  }
+ }, { sheetName: SpreadsheetApp.getActiveSheet().getName() });
+}
+
+function generateSingleEpicPrompt(epicKey, contextText, perspectiveType) {
+  if (perspectiveType === 'Business') {
+    return `Create a ONE-SENTENCE executive summary (maximum 25 words).
+
+AVAILABLE DATA:
+${contextText}
+
+Write a concise summary explaining the business value and what will be delivered.
+
+RULES:
+- ONE SENTENCE maximum
+- MAXIMUM 25 WORDS
+- Start with: "The program..." or "We are delivering..."
+- Focus on business outcome
+- NO phrases: "This PI will", "In this PI"
+- If insufficient data, return "N/A"`;
+  } else {
+    return `Create ONE sentence explaining what is being built technically.
+
+AVAILABLE DATA:
+${contextText}
+
+Write a concise summary explaining what is being built technically.
+
+RULES:
+- EXACTLY ONE SENTENCE
+- MAXIMUM 20 WORDS - count before responding
+- Start with: "The feature...", "The system...", "The platform...", "This work..."
+- NEVER use: "Engineer will", "Engineers are", "We will", "The team will"
+- Use present tense: "delivers", "builds", "integrates"
+- NO reference to "Epic" or "Initiative" - use "feature" or "program"
+- If any fields that we are pulling to read is blank ignore and process with the fields that contain data
+- If insufficient data, return "N/A"`;
+  }
+}
+
+function generateSingleEpicMergedPerspective(epicKey, contextText, perspectiveType) {
+  
+  let prompt = '';
+  
+  if (perspectiveType === 'Business') {
+    prompt = `Create a ONE-SENTENCE executive summary (maximum 20 words).
+
+AVAILABLE DATA:
+${contextText}
+
+INSTRUCTIONS:
+Write a concise summary explaining the business value and what will be delivered.
+
+STRICT RULES:
+- EXACTLY ONE SENTENCE (no periods until the end)
+- MAXIMUM 20 WORDS - this is non-negotiable
+- Start with the subject: "The initiative...", "We are delivering...", "The team will implement..."
+- Focus on business outcome, not process
+- NO phrases like: "This PI will", "In this PI", "This work will focus on"
+- If any fields that we are pulling to read is blank ignore and process with the fields that contain data
+
+STRUCTURE:
+[Subject] + [action verb] + [what's being delivered] + [business value]
+
+Example (18 words): "The initiative modernizes payment processing to reduce transaction failures by 40% and improve customer satisfaction."
+
+If no initiative exists, summarize the epic's business value in one sentence under 20 words.
+If you cannot process the input, return "N/A"
+If insufficient data, return "N/A"
+
+CRITICAL: Count your words before responding. If over 20 words, revise until under 20.`;
+    
+  } else {
+    // Technical perspective
+    prompt = `Create a 2-3 sentence executive technical summary for this feature.
+
+AVAILABLE DATA:
+${contextText}
+
+INSTRUCTIONS:
+Write a concise summary explaining what is being built technically.
+
+CRITICAL RULES:
+- EXACTLY ONE SENTENCE  
+- MAXIMUM 20 WORDS - count before responding
+- Start with: "The feature...", "The system...", "The platform...", "This work..."
+- NEVER use: "This PI will", "In this PI", "Engineer will", "Engineers are", "We will", "The team will"
+- Use present tense: "delivers", "builds", "integrates", "establishes"
+- NO reference to "Epic" or "Initiative" - use "feature" or "program"
+- If any fields that we are pulling to read is blank ignore and process with the fields that contain data
+- If insufficient data, return "N/A"`;
+  }
+  
+  return callGeminiAPIWithFallback(prompt, 'N/A*');
+}
+function generateMergedInitiativePerspectives(ss, sheet, headers, dataValues, headerRow, COLUMN_MAPPINGS) {
+  
+  console.log('\n=== GENERATING MERGED PERSPECTIVES (BATCHED) ===');
+  
+  // Get column indices
+  const getColIndex = (mappingKey) => {
+    const possibleNames = COLUMN_MAPPINGS[mappingKey];
+    for (const name of possibleNames) {
+      const idx = headers.indexOf(name);
+      if (idx !== -1) return idx;
+    }
+    return -1;
+  };
+  
+  const keyCol = getColIndex('key');
+  const parentKeyCol = getColIndex('parentKey');
+  const issueTypeCol = getColIndex('issueType');
+  
+  // RAW DATA COLUMNS
+  const summaryCol = getColIndex('summary');
+  const epicNameCol = headers.indexOf('Epic Name');
+  const piObjectiveCol = getColIndex('piObjective');
+  const benefitHypothesisCol = getColIndex('benefitHypothesis');
+  const acceptanceCriteriaCol = getColIndex('acceptanceCriteria');
+  const initiativeTitleCol = getColIndex('initiativeTitle');
+  const initiativeDescCol = getColIndex('initiativeDescription');
+  
+  // Verify prerequisite columns exist
+  const businessPerspectiveCol = headers.indexOf('Business Perspective');
+  const technicalPerspectiveCol = headers.indexOf('Technical Perspective');
+  
+  if (businessPerspectiveCol === -1) {
+    throw new Error('Business Perspective column not found! Make sure epic-level perspectives are generated first.');
+  }
+  if (technicalPerspectiveCol === -1) {
+    throw new Error('Technical Perspective column not found! Make sure epic-level perspectives are generated first.');
+  }
+  
+  // Find or create the MERGED perspective columns with proper indexing
+  const mergedBusinessColumnName = 'Merged Business Perspective';
+  const mergedTechnicalColumnName = 'Merged Technical Perspective';
+  
+  let mergedBusinessColNumber;  // 1-based column number
+  let mergedTechnicalColNumber; // 1-based column number
+  
+  // Check if Merged Business Perspective exists
+  const mergedBusinessIdx = headers.indexOf(mergedBusinessColumnName);
+  if (mergedBusinessIdx === -1) {
+    const currentLastCol = sheet.getLastColumn();
+    sheet.insertColumnAfter(currentLastCol);
+    mergedBusinessColNumber = currentLastCol + 1;
+    sheet.getRange(headerRow, mergedBusinessColNumber)
+      .setValue(mergedBusinessColumnName)
+      .setFontWeight('bold')
+      .setBackground('#9b7bb8');
+    headers.push(mergedBusinessColumnName);
+    console.log(`Created "${mergedBusinessColumnName}" at column ${mergedBusinessColNumber} (${columnNumberToLetter(mergedBusinessColNumber)})`);
+  } else {
+    mergedBusinessColNumber = mergedBusinessIdx + 1;
+    console.log(`Found "${mergedBusinessColumnName}" at column ${mergedBusinessColNumber} (${columnNumberToLetter(mergedBusinessColNumber)})`);
+  }
+  
+  // Check if Merged Technical Perspective exists
+  const mergedTechnicalIdx = headers.indexOf(mergedTechnicalColumnName);
+  if (mergedTechnicalIdx === -1) {
+    const currentLastCol = sheet.getLastColumn();
+    sheet.insertColumnAfter(currentLastCol);
+    mergedTechnicalColNumber = currentLastCol + 1;
+    sheet.getRange(headerRow, mergedTechnicalColNumber)
+      .setValue(mergedTechnicalColumnName)
+      .setFontWeight('bold')
+      .setBackground('#9b7bb8');
+    headers.push(mergedTechnicalColumnName);
+    console.log(`Created "${mergedTechnicalColumnName}" at column ${mergedTechnicalColNumber} (${columnNumberToLetter(mergedTechnicalColNumber)})`);
+  } else {
+    mergedTechnicalColNumber = mergedTechnicalIdx + 1;
+    console.log(`Found "${mergedTechnicalColumnName}" at column ${mergedTechnicalColNumber} (${columnNumberToLetter(mergedTechnicalColNumber)})`);
+  }
+  
+  // Group epics by Parent Key
+  const initiativeGroups = {};
+  
+  dataValues.forEach((row, rowIndex) => {
+    const issueType = row[issueTypeCol];
+    const parentKey = row[parentKeyCol];
+    
+    if (issueType === 'Epic' && parentKey) {
+      if (!initiativeGroups[parentKey]) {
+        initiativeGroups[parentKey] = [];
+      }
+      
+      const getVal = (colIdx) => {
+        return (colIdx >= 0 && row[colIdx]) ? String(row[colIdx]).trim() : '';
+      };
+      
+      initiativeGroups[parentKey].push({
+        rowIndex: rowIndex,
+        key: getVal(keyCol),
+        summary: getVal(summaryCol),
+        epicName: getVal(epicNameCol),
+        piObjective: getVal(piObjectiveCol),
+        benefitHypothesis: getVal(benefitHypothesisCol),
+        acceptanceCriteria: getVal(acceptanceCriteriaCol),
+        initiativeTitle: getVal(initiativeTitleCol),
+        initiativeDescription: getVal(initiativeDescCol)
+      });
+    }
+  });
+  
+  const initiativeKeys = Object.keys(initiativeGroups);
+  console.log(`Processing ${initiativeKeys.length} initiatives with BATCHED AI calls`);
+  
+  // --- BUILD BATCH TASKS ---
+  const businessTasks = [];
+  const technicalTasks = [];
+  
+  for (const [parentKey, epics] of Object.entries(initiativeGroups)) {
+    const epicRowIndices = epics.map(e => e.rowIndex);
+    
+    if (epics.length === 1) {
+      // Single epic - build from raw data
+      const epic = epics[0];
+      
+      let contextText = '';
+      if (epic.initiativeTitle) contextText += `Initiative: ${epic.initiativeTitle}\n`;
+      if (epic.initiativeDescription) contextText += `Description: ${epic.initiativeDescription}\n`;
+      if (epic.epicName) contextText += `Epic: ${epic.epicName}\n`;
+      if (epic.summary) contextText += `Summary: ${epic.summary}\n`;
+      if (epic.piObjective) contextText += `PI Objective: ${epic.piObjective}\n`;
+      if (epic.benefitHypothesis) contextText += `Benefit: ${epic.benefitHypothesis}\n`;
+      if (epic.acceptanceCriteria) contextText += `Acceptance: ${epic.acceptanceCriteria}\n`;
+      
+      if (contextText.length > 50) {
+        // Generate prompts for single epic
+        const businessPrompt = buildSingleEpicPrompt(epic.key, contextText, 'Business');
+        const technicalPrompt = buildSingleEpicPrompt(epic.key, contextText, 'Technical');
+        
+        businessTasks.push({ parentKey, prompt: businessPrompt, epicRowIndices });
+        technicalTasks.push({ parentKey, prompt: technicalPrompt, epicRowIndices });
+      } else {
+        // Not enough data
+        businessTasks.push({ parentKey, prompt: null, directValue: 'N/A*', epicRowIndices });
+        technicalTasks.push({ parentKey, prompt: null, directValue: 'N/A*', epicRowIndices });
+      }
+      
+    } else {
+      // Multiple epics - generate merged perspective
+      const initiativeTitle = epics[0].initiativeTitle || 'Unknown Initiative';
+      const initiativeDescription = epics[0].initiativeDescription || '';
+      
+      let epicContextDetails = '';
+      epics.forEach((epic, idx) => {
+        epicContextDetails += `\n=== EPIC ${idx + 1} (${epic.key}) ===\n`;
+        if (epic.epicName) epicContextDetails += `Epic Name: ${epic.epicName}\n`;
+        if (epic.summary) epicContextDetails += `Summary: ${epic.summary}\n`;
+        if (epic.piObjective) epicContextDetails += `PI Objective: ${epic.piObjective}\n`;
+        if (epic.benefitHypothesis) epicContextDetails += `Benefit: ${epic.benefitHypothesis}\n`;
+        if (epic.acceptanceCriteria) epicContextDetails += `Acceptance: ${epic.acceptanceCriteria}\n`;
+      });
+      
+      const businessPrompt = buildMergedPrompt(initiativeTitle, parentKey, initiativeDescription, epicContextDetails, 'Business');
+      const technicalPrompt = buildMergedPrompt(initiativeTitle, parentKey, initiativeDescription, epicContextDetails, 'Technical');
+      
+      businessTasks.push({ parentKey, prompt: businessPrompt, epicRowIndices });
+      technicalTasks.push({ parentKey, prompt: technicalPrompt, epicRowIndices });
+    }
+  }
+  
+  console.log(`Built ${businessTasks.length} business tasks and ${technicalTasks.length} technical tasks`);
+  
+  // --- PROCESS BUSINESS PERSPECTIVES IN BATCHES ---
+  const businessResults = processBatchedTasks(businessTasks, 'Business', ss);
+  
+  // --- PROCESS TECHNICAL PERSPECTIVES IN BATCHES ---
+  const technicalResults = processBatchedTasks(technicalTasks, 'Technical', ss);
+  
+  // --- WRITE ALL RESULTS TO SHEET ---
+  console.log('Writing all results to sheet...');
+  let writtenCount = 0;
+  
+  businessTasks.forEach((task, idx) => {
+    const businessValue = task.directValue || businessResults.get(task.parentKey) || 'N/A*';
+    const technicalValue = technicalTasks[idx].directValue || technicalResults.get(task.parentKey) || 'N/A*';
+    
+    task.epicRowIndices.forEach(rowIndex => {
+      const actualRow = headerRow + 1 + rowIndex;
+      sheet.getRange(actualRow, mergedBusinessColNumber).setValue(businessValue);
+      sheet.getRange(actualRow, mergedTechnicalColNumber).setValue(technicalValue);
+    });
+    
+    writtenCount++;
+    if (writtenCount % 20 === 0) {
+      ss.toast(`Written ${writtenCount}/${businessTasks.length} merged perspectives...`, 'Progress', 1);
+    }
+  });
+  
+  console.log(`✓ Generated and wrote ${businessTasks.length} merged perspectives (batched processing)`);
+}
+
+// Helper: Build single epic prompt
+function buildSingleEpicPrompt(epicKey, contextText, perspectiveType) {
+  if (perspectiveType === 'Business') {
+    return `Create a concise business summary (under 50 words).
+
+AVAILABLE DATA:
+${contextText}
+
+Write a summary explaining the business value and what will be delivered.
+
+RULES:
+- Under 50 words
+- Start with: "The program..." or "We are delivering..."
+- Focus on business outcome
+- NO phrases: "This PI will", "In this PI"
+- If insufficient data, return "N/A"`;
+  } else {
+    return `Create a concise technical summary (under 50 words).
+
+AVAILABLE DATA:
+${contextText}
+
+Write a summary explaining what is being built technically.
+
+RULES:
+- Under 50 words
+- Start immediately with the subject
+- Use clear technical language
+- Do not reference "Epic" or "Initiative", use "feature" or "program"
+- If insufficient data, return "N/A"`;
+  }
+}
+
+// Helper: Build merged prompt
+function buildMergedPrompt(initiativeTitle, parentKey, initiativeDescription, epicContextDetails, perspectiveType) {
+  if (perspectiveType === 'Business') {
+    return `You are writing a brief business perspective summary for an executive presentation about this initiative.
+
+INITIATIVE:
+Title: ${initiativeTitle}
+Key: ${parentKey}
+${initiativeDescription ? `Description: ${initiativeDescription}` : ''}
+
+CHILD EPICS:
+${epicContextDetails}
+
+INSTRUCTIONS:
+Explain the business value across all epics in under 50 words.
+
+RULES:
+- Start with: "The program..." or "We are delivering..."
+- NO phrases: "This PI will", "Epic 1", "Epic 2"
+- Synthesize across ALL epics
+- Maximum 50 words
+- Do not reference "Epic" or "Initiative", use "program" or "feature"
+- If insufficient data, return "N/A"`;
+  } else {
+    return `You are writing a brief technical perspective summary for an executive presentation about this initiative.
+
+
+INITIATIVE:
+Title: ${initiativeTitle}
+Key: ${parentKey}
+${initiativeDescription ? `Description: ${initiativeDescription}` : ''}
+
+CHILD EPICS:
+${epicContextDetails}
+
+INSTRUCTIONS:
+Write ONE sentence explaining what is being built technically for this initiative.
+.
+
+RULES:
+- EXACTLY ONE SENTENCE
+- MAXIMUM 20 WORDS - count before responding
+- Start with: "The initiative...", "The system...", "The platform...", "This work..."
+- NEVER use: "Engineer will", "Engineers are", "Engineers will", "We will", "The team will"
+- Use present tense: "delivers", "builds", "integrates", "establishes"
+- Focus on WHAT is being delivered technically
+- If insufficient data, return "N/A"`;
+  }
+}
+
+// Helper: Process tasks in batches
+function processBatchedTasks(tasks, perspectiveType, ss) {
+  const tasksNeedingAI = tasks.filter(t => t.prompt !== null);
+  const results = new Map();
+  
+  if (tasksNeedingAI.length === 0) {
+    console.log(`No ${perspectiveType} tasks need AI generation`);
+    return results;
+  }
+  
+  const BATCH_SIZE = 25;
+  const totalBatches = Math.ceil(tasksNeedingAI.length / BATCH_SIZE);
+  
+  console.log(`Processing ${tasksNeedingAI.length} ${perspectiveType} tasks in ${totalBatches} batches`);
+  
+  for (let i = 0; i < tasksNeedingAI.length; i += BATCH_SIZE) {
+    const batch = tasksNeedingAI.slice(i, i + BATCH_SIZE);
+    const batchPrompts = batch.map(task => task.prompt);
+    
+    const currentBatchNum = Math.floor(i / BATCH_SIZE) + 1;
+    
+    ss.toast(
+      `Generating ${perspectiveType} perspectives: batch ${currentBatchNum}/${totalBatches} (${batch.length} initiatives)...`,
+      '🧠 AI Processing',
+      10
+    );
+    
+    console.log(`Processing ${perspectiveType} batch ${currentBatchNum}/${totalBatches}`);
+    
+    // Call AI batch summarization
+    const batchInstruction = `You are creating executive ${perspectiveType.toLowerCase()} summaries for program governance. Each input describes an initiative. Create concise summaries under 50 words each.`;
+    const batchResults = batchSummarize(batchPrompts, batchInstruction);
+    
+    // Map results back to parentKeys
+    batch.forEach((task, idx) => {
+      results.set(task.parentKey, batchResults[idx]);
+    });
+    
+    Utilities.sleep(500);
+  }
+  
+  console.log(`✓ Completed ${perspectiveType} perspective generation`);
+  return results;
+}
+
+// Helper function to convert column number to letter
+function columnNumberToLetter(column) {
+  let temp, letter = '';
+  while (column > 0) {
+    temp = (column - 1) % 26;
+    letter = String.fromCharCode(temp + 65) + letter;
+    column = (column - temp - 1) / 26;
+  }
+  return letter;
+}
+
+
+function generateMergedPrompt(initiativeTitle, initiativeDescription, epicPerspectives, perspectiveType) {
+  if (perspectiveType === 'Business') {
+    return `Merge these executive business summaries into ONE cohesive summary for the INITIATIVE.
+
+INITIATIVE:
+Title: ${initiativeTitle}
+${initiativeDescription ? `Description: ${initiativeDescription}` : ''}
+
+CHILD EPIC SUMMARIES:
+${epicPerspectives}
+
+INSTRUCTIONS:
+Create ONE unified 2-3 sentence summary (maximum 50 words) that:
+1. States the initiative's OVERALL business goal
+2. Describes the COLLECTIVE business value
+
+CRITICAL RULES:
+- MERGE perspectives into one cohesive statement
+- Start with: "The program modernizes..." or "We are delivering..."
+- NEVER use: "This PI will", "Epic 1", "Epic 2"
+- NO bullet points or lists
+- Maximum 50 words
+- Do not reference "Epic" or "Initiative", use "program" or "feature"
+- Focus on BIG PICTURE
+
+GOOD EXAMPLE:
+"The authentication program establishes secure identity management across web and mobile platforms, reducing security risks while improving user experience."
+
+BAD EXAMPLE:
+"Epic 1 implements OAuth. Epic 2 adds MFA. Epic 3 handles permissions."`;
+  } else {
+    return `Merge these executive technical summaries into ONE cohesive summary for the INITIATIVE.
+
+INITIATIVE:
+Title: ${initiativeTitle}
+${initiativeDescription ? `Description: ${initiativeDescription}` : ''}
+
+CHILD EPIC SUMMARIES:
+${epicPerspectives}
+
+INSTRUCTIONS:
+Create ONE unified 2-3 sentence summary (maximum 50 words) that:
+1. States the initiative's OVERALL technical goal
+2. Describes the COLLECTIVE engineering work
+
+CRITICAL RULES:
+- MERGE perspectives into one cohesive statement
+- Start with: "Engineers are building..." or "The system provides..."
+- NEVER use: "This PI will", "Epic 1", "Epic 2"
+- NO bullet points or lists
+- Maximum 50 words
+- Do not reference "Epic" or "Initiative", use "program" or "feature"
+- Use technical language for executives
+
+GOOD EXAMPLE:
+"Engineers are building a cloud-native authentication framework using OAuth 2.0, integrating with existing identity providers for seamless user management."
+
+BAD EXAMPLE:
+"Epic 1 does OAuth API. Epic 2 builds frontend. Epic 3 adds database."`;
+  }
+}
+
+// Helper function to get batch-level instructions
+function getMergedPerspectiveInstructions(perspectiveType) {
+  if (perspectiveType === 'Business') {
+    return `You are creating executive business summaries. Each input describes an initiative with multiple epics. Merge the epic summaries into ONE cohesive statement about the overall initiative's business value. Keep each response under 50 words.`;
+  } else {
+    return `You are creating executive technical summaries. Each input describes an initiative with multiple epics. Merge the epic summaries into ONE cohesive statement about the overall initiative's technical work. Keep each response under 50 words.`;
+  }
+}
+
+function generateEnhancedPIReadoutHelper(ss, ui, sheet, headers, dataValues, headerRow, COLUMN_MAPPINGS, jobConfig) {
+  
+  const { newColumnHeader, summaryPrompt, sourceColumns, filterColumn, filterValue } = jobConfig;
+  ss.toast(`Processing "${newColumnHeader}" with initiative context...`, '🧠 Thinking...', 10);
+
+  // --- 1. BUILD COLUMN INDEX MAP ---
+  const colMap = {};
+  for (const key of sourceColumns) {
+    const possibleNames = COLUMN_MAPPINGS[key];
+    const index = headers.findIndex(header => possibleNames.includes(header));
+    if (index === -1) {
+      console.warn(`Column not found: ${possibleNames.join(', ')} - will use empty values`);
+      colMap[key] = -1; // Mark as not found
+    } else {
+      colMap[key] = index;
+    }
+  }
+  
+  const filterCol = headers.findIndex(header => COLUMN_MAPPINGS[filterColumn].includes(header));
+  if (filterCol === -1) {
+    throw new Error(`Could not find filter column. Missing: [${COLUMN_MAPPINGS[filterColumn].join(', ')}]`);
+  }
+
+  // --- 2. CREATE OR LOCATE DESTINATION COLUMN ---
+  let destCol = headers.indexOf(newColumnHeader);
+  if (destCol === -1) {
+    destCol = sheet.getLastColumn() + 1;
+    sheet.getRange(headerRow, destCol).setValue(newColumnHeader)
+      .setFontWeight('bold').setBackground('#9b7bb8');
+    sheet.setColumnWidth(destCol, 400);
+  } else {
+    destCol += 1; // Convert to 1-based
+  }
+
+  // --- 3. COLLECT EPIC DATA WITH INITIATIVE CONTEXT ---
+  const summaryTasks = [];
+  
+  for (let i = 0; i < dataValues.length; i++) {
+    const row = dataValues[i];
+    
+    // Only process epics
+    if (row[filterCol] !== filterValue) continue;
+    
+    // Helper function to safely get column value
+    const getVal = (colKey) => {
+      const idx = colMap[colKey];
+      return (idx >= 0 && row[idx]) ? String(row[idx]).trim() : '';
+    };
+    
+    // Extract all relevant data
+    const epicKey = getVal('key');
+    const parentKey = getVal('parentKey');
+    const epicSummary = getVal('summary');
+    const piObjective = getVal('piObjective');
+    const benefitHypothesis = getVal('benefitHypothesis');
+    const acceptanceCriteria = getVal('acceptanceCriteria');
+    const initiativeTitle = getVal('initiativeTitle');
+    const initiativeDescription = getVal('initiativeDescription');
+    
+    // Build context-rich input text
+    let combinedText = '';
+    
+    // Add initiative context if available
+    if (parentKey && (initiativeTitle || initiativeDescription)) {
+      combinedText += `=== OVERALL INITIATIVE (Parent: ${parentKey}) ===\n`;
+      if (initiativeTitle) {
+        combinedText += `Initiative: ${initiativeTitle}\n`;
+      }
+      if (initiativeDescription) {
+        combinedText += `Description: ${initiativeDescription}\n`;
+      }
+      combinedText += `\n=== THIS PI'S EPIC (${epicKey}) ===\n`;
+    } else {
+      combinedText += `=== EPIC ${epicKey} (No Parent Initiative) ===\n`;
+    }
+    
+    // Add epic-level details
+    if (epicSummary) {
+      combinedText += `Epic Summary: ${epicSummary}\n`;
+    }
+    if (piObjective) {
+      combinedText += `PI Objective: ${piObjective}\n`;
+    }
+    if (benefitHypothesis) {
+      combinedText += `Benefit Hypothesis: ${benefitHypothesis}\n`;
+    }
+    if (acceptanceCriteria) {
+      combinedText += `Acceptance Criteria: ${acceptanceCriteria}\n`;
+    }
+    
+    // Only add task if there's meaningful content
+    if (combinedText.length > 100) {
+      summaryTasks.push({ 
+        text: combinedText, 
+        index: i,
+        epicKey: epicKey,
+        hasInitiative: !!(parentKey && (initiativeTitle || initiativeDescription))
+      });
+    }
+  }
+
+  if (summaryTasks.length === 0) {
+    ui.alert(`"${newColumnHeader}" Job: No epics with sufficient data were found on this sheet.`);
+    return;
+  }
+  
+  console.log(`Found ${summaryTasks.length} epics to summarize (${summaryTasks.filter(t => t.hasInitiative).length} with initiative context)`);
+
+  // --- 4. PROCESS IN BATCHES ---
+  const BATCH_SIZE = 25;
+  const outputRange = sheet.getRange(headerRow + 1, destCol, dataValues.length, 1);
+  const outputValues = outputRange.getValues();
+
+  for (let i = 0; i < summaryTasks.length; i += BATCH_SIZE) {
+    const batchTasks = summaryTasks.slice(i, i + BATCH_SIZE);
+    const batchTexts = batchTasks.map(task => task.text);
+    
+    const currentBatchNum = Math.floor(i / BATCH_SIZE) + 1;
+    const totalBatches = Math.ceil(summaryTasks.length / BATCH_SIZE);
+    ss.toast(
+      `"${newColumnHeader}": Processing batch ${currentBatchNum}/${totalBatches} (${batchTasks.length} epics)...`, 
+      '🧠 Thinking...', 
+      15
+    );
+
+    // Call AI batch summarization
+    const batchSummaries = batchSummarize(batchTexts, summaryPrompt);
+
+    // Validate response
+    if (batchSummaries.length !== batchTasks.length) {
+      console.error(`Batch ${currentBatchNum} mismatch: Expected ${batchTasks.length}, got ${batchSummaries.length}`);
+      batchTasks.forEach(task => {
+        outputValues[task.index][0] = "Error: AI response mismatch.";
+      });
+      continue;
+    }
+
+    // Map summaries back to sheet rows
+    batchSummaries.forEach((summary, j) => {
+      const originalIndex = batchTasks[j].index;
+      outputValues[originalIndex][0] = summary;
+    });
+  }
+
+  // --- 5. WRITE ALL DATA BACK ---
+  outputRange.setValues(outputValues);
+  outputRange.setWrapStrategy(SpreadsheetApp.WrapStrategy.WRAP);
+
+  ss.toast(`✅ "${newColumnHeader}" complete!`, '✅ Success', 5);
+}
+function generateEpicPerspectivesOnSheet(targetSheet) {
+  const ss = targetSheet.getParent();
+  const sheet = targetSheet;
+  
+  const sheetName = sheet.getName();
+  if (!sheetName.includes('Governance') && !sheetName.match(/PI \d+ - Iteration \d+/)) {
+    console.warn('Not a valid report sheet for epic perspectives');
+    return;
+  }
+  
+  console.log(`Starting epic-level perspective generation on sheet: ${sheetName}`);
+  const headerRow = 4;
+
+  try {
+    const COLUMN_MAPPINGS = {
+      key: ['Key'],
+      parentKey: ['Parent Key'],
+      issueType: ['Issue Type'],
+      summary: ['Summary'],
+      piObjective: ['PI Objective'],
+      benefitHypothesis: ['Benefit Hypothesis'],
+      acceptanceCriteria: ['Acceptance Criteria'],
+      initiativeTitle: ['Initiative Title'],
+      initiativeDescription: ['Initiative Description']
+    };
+    
+    let headers = sheet.getRange(headerRow, 1, 1, sheet.getLastColumn()).getValues()[0].map(h => h.trim());
+    const dataValues = sheet.getRange(headerRow + 1, 1, sheet.getLastRow() - headerRow, sheet.getLastColumn()).getValues();
+
+    // Business Perspective
+    const businessJob = {
+      newColumnHeader: 'Business Perspective',
+      summaryPrompt: `Create a ONE-SENTENCE executive summary (maximum 20 words).
+
+INSTRUCTIONS:
+Write a concise summary explaining the business value and what will be delivered.
+
+STRICT RULES:
+- EXACTLY ONE SENTENCE (no periods until the end)
+- MAXIMUM 20 WORDS - this is non-negotiable
+- Start with the subject: "The initiative...", "We are delivering...", "The team will implement..."
+- Focus on business outcome, not process
+- NO phrases like: "This PI will", "In this PI", "This work will focus on"
+
+STRUCTURE:
+[Subject] + [action verb] + [what's being delivered] + [business value]
+
+If no initiative exists, summarize the epic's business value in one sentence under 20 words.
+If you cannot process the input, return "N/A"
+If input is empty, return "N/A"
+
+CRITICAL: Count your words before responding.`,
+      sourceColumns: ['key', 'summary', 'piObjective', 'benefitHypothesis', 'acceptanceCriteria', 'initiativeTitle', 'initiativeDescription'],
+      filterColumn: 'issueType',
+      filterValue: 'Epic'
+    };
+    
+    generateEnhancedPIReadoutHelper(ss, null, sheet, headers, dataValues, headerRow, COLUMN_MAPPINGS, businessJob);
+    
+    // Refresh headers after business perspective column added
+    headers = sheet.getRange(headerRow, 1, 1, sheet.getLastColumn()).getValues()[0].map(h => h.trim());
+    
+    // Technical Perspective
+    const technicalJob = {
+      newColumnHeader: 'Technical Perspective',
+      summaryPrompt: `Create a ONE-SENTENCE technical summary (maximum 20 words).
+
+INSTRUCTIONS:
+Write a concise summary explaining the key technical work and deliverables.
+
+STRICT RULES:
+- EXACTLY ONE SENTENCE (no periods until the end)
+- MAXIMUM 20 WORDS - this is non-negotiable  
+- Start with action verb: "Implementing...", "Building...", "Establishing...", "Migrating..."
+- Focus on WHAT is being built technically (systems, APIs, infrastructure)
+- NO phrases like: "Engineer will", "The team is working on", "This involves"
+
+STRUCTURE:
+[Action verb] + [technical deliverable] + [system/capability context]
+
+If no initiative exists, summarize the epic's technical work in one sentence under 20 words.
+If you cannot process the input, return "N/A"
+If input is empty, return "N/A"
+
+CRITICAL: Count your words before responding.`,
+      sourceColumns: ['key', 'summary', 'piObjective', 'benefitHypothesis', 'acceptanceCriteria', 'initiativeTitle', 'initiativeDescription'],
+      filterColumn: 'issueType',
+      filterValue: 'Epic'
+    };
+    
+    generateEnhancedPIReadoutHelper(ss, null, sheet, headers, dataValues, headerRow, COLUMN_MAPPINGS, technicalJob);
+    
+    console.log('✓ Epic perspectives complete on sheet: ' + sheetName);
+
+  } catch (error) {
+    console.error('Epic Perspective Error:', error);
+    throw error;
+  }
+}
+
+/**
+ * Generates initiative perspectives on a specific sheet (for pipeline use)
+ * @param {Sheet} targetSheet - The sheet to process
+ */
+function generateInitiativePerspectivesOnSheet(targetSheet) {
+  const ss = targetSheet.getParent();
+  const sheet = targetSheet;
+  
+  const sheetName = sheet.getName();
+  if (!sheetName.includes('Governance') && !sheetName.match(/PI \d+ - Iteration \d+/)) {
+    console.warn('Not a valid report sheet for initiative perspectives');
+    return;
+  }
+  
+  let headers = sheet.getRange(4, 1, 1, sheet.getLastColumn()).getValues()[0].map(h => h.trim());
+  
+  if (headers.indexOf('Business Perspective') === -1 || headers.indexOf('Technical Perspective') === -1) {
+    console.error('Missing prerequisites: Business Perspective and Technical Perspective columns required');
+    return;
+  }
+  
+  console.log(`Starting initiative-level perspective generation on sheet: ${sheetName}`);
+  const headerRow = 4;
+
+  try {
+    const COLUMN_MAPPINGS = {
+      key: ['Key'],
+      parentKey: ['Parent Key'],
+      issueType: ['Issue Type'],
+      summary: ['Summary'],
+      piObjective: ['PI Objective'],
+      benefitHypothesis: ['Benefit Hypothesis'],
+      acceptanceCriteria: ['Acceptance Criteria'],
+      initiativeTitle: ['Initiative Title'],
+      initiativeDescription: ['Initiative Description']
+    };
+    
+    const dataValues = sheet.getRange(headerRow + 1, 1, sheet.getLastRow() - headerRow, sheet.getLastColumn()).getValues();
+
+    generateMergedInitiativePerspectives(ss, sheet, headers, dataValues, headerRow, COLUMN_MAPPINGS);
+    
+    console.log('✓ Initiative perspectives complete on sheet: ' + sheetName);
+
+  } catch (error) {
+    console.error('Initiative Perspective Error:', error);
+    throw error;
+  }
+}

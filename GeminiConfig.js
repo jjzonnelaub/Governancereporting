@@ -1,0 +1,41 @@
+// ===== GEMINI AI CONFIGURATION =====
+
+/**
+ * Prompts the user to enter and save their Gemini API key.
+ */
+function setupGeminiConfiguration() {
+  const ui = SpreadsheetApp.getUi();
+  const response = ui.prompt(
+    'Gemini API Key Setup',
+    'Please enter your Gemini API Key:',
+    ui.ButtonSet.OK_CANCEL
+  );
+
+  if (response.getSelectedButton() == ui.Button.OK) {
+    const apiKey = response.getResponseText();
+    if (apiKey && apiKey.trim() !== '') {
+      PropertiesService.getScriptProperties().setProperty('GEMINI_API_KEY', apiKey);
+      ui.alert('✅ Success', 'Your Gemini API Key has been saved.', ui.ButtonSet.OK);
+    } else {
+      ui.alert('⚠️ Error', 'API Key cannot be empty.', ui.ButtonSet.OK);
+    }
+  }
+}
+function getGeminiConfig() {
+  try {
+    const apiKey = PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY');
+    
+    if (!apiKey || apiKey.trim() === '') {
+      Logger.log('WARN: Gemini API key not found in Script Properties');
+      return null;
+    }
+    
+    return {
+      apiKey: apiKey,
+      model: 'gemini-2.0-flash' // Current stable model (Nov 2025)
+    };
+  } catch (error) {
+    Logger.log(`ERROR in getGeminiConfig: ${error.message}`);
+    return null;
+  }
+}

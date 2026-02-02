@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <style>
+    body {
+      font-family: 'Google Sans', Arial, sans-serif;
+      margin: 20px;
+      padding: 0;
+    }
+    
+    h2 {
+      color: #663399;
+      margin-bottom: 10px;
+    }
+    
+    .instructions {
+      background-color: #f0f0f0;
+      padding: 15px;
+      border-radius: 5px;
+      margin-bottom: 20px;
+      font-size: 14px;
+    }
+    
+    .portfolio-list {
+      border: 1px solid #ddd;
+      border-radius: 5px;
+      max-height: 400px;
+      overflow-y: auto;
+      margin-bottom: 20px;
+    }
+    
+    .portfolio-item {
+      display: flex;
+      align-items: center;
+      padding: 12px;
+      border-bottom: 1px solid #eee;
+      cursor: move;
+      background-color: white;
+      transition: background-color 0.2s;
+    }
+    
+    .portfolio-item:hover {
+      background-color: #f9f9f9;
+    }
+    
+    .portfolio-item.dragging {
+      opacity: 0.5;
+      background-color: #e0e0e0;
+    }
+    
+    .portfolio-item:last-child {
+      border-bottom: none;
+    }
+    
+    /* NEW: Checkbox styling */
+    .portfolio-checkbox {
+      margin-right: 12px;
+      width: 18px;
+      height: 18px;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    
+    .drag-handle {
+      margin-right: 12px;
+      color: #999;
+      cursor: move;
+      font-size: 20px;
+      user-select: none;
+      flex-shrink: 0;
+    }
+    
+    .portfolio-name {
+      flex-grow: 1;
+      font-size: 14px;
+      user-select: none;
+    }
+    
+    /* NEW: Disabled portfolio styling */
+    .portfolio-item.disabled {
+      opacity: 0.5;
+    }
+    
+    .portfolio-item.disabled .portfolio-name {
+      text-decoration: line-through;
+      color: #999;
+    }
+    
+    .button-container {
+      display: flex;
+      gap: 10px;
+      justify-content: flex-end;
+    }
+    
+    button {
+      padding: 10px 20px;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+    }
+    
+    .btn-primary {
+      background-color: #663399;
+      color: white;
+    }
+    
+    .btn-primary:hover {
+      background-color: #552288;
+    }
+    
+    .btn-secondary {
+      background-color: #e0e0e0;
+      color: #333;
+    }
+    
+    .btn-secondary:hover {
+      background-color: #d0d0d0;
+    }
+    
+    /* NEW: Summary section */
+    .summary {
+      background-color: #e8e0ff;
+      padding: 12px;
+      border-radius: 5px;
+      margin-bottom: 15px;
+      font-size: 14px;
+      color: #663399;
+      font-weight: 500;
+    }
+    
+    .loading {
+      text-align: center;
+      padding: 20px;
+      color: #999;
+    }
+  </style>
+</head>
+<body>
+  <h2>📊 Portfolio Slide Configuration</h2>
+  
+  <div class="instructions">
+    <strong>How to configure:</strong><br>
+    • <strong>✅ Check/Uncheck</strong> to include/exclude portfolios from slides<br>
+    • <strong>🔄 Drag & Drop</strong> to reorder portfolios (only affects included portfolios)<br>
+    • Unchecked portfolios will be completely excluded from slide generation
+  </div>
+  
+  <!-- NEW: Summary section -->
+  <div class="summary" id="summary">
+    Loading portfolio configuration...
+  </div>
+  
+  <div class="portfolio-list" id="portfolioList">
+    <div class="loading">Loading portfolios...</div>
+  </div>
+  
+  <div class="button-container">
+    <button class="btn-secondary" onclick="google.script.host.close()">Cancel</button>
+    <button class="btn-primary" onclick="saveConfiguration()">Save Configuration</button>
+  </div>
+
+  <script>
+    let portfolios = [];
+    let draggedElement = null;
+    
+    // Load portfolio data when dialog opens
+    google.script.run
+      .withSuccessHandler(initializePortfolios)
+      .withFailureHandler(showError)
+      .getPortfolioConfigData();
+    
+    function initializePortfolios(data) {
+      portfolios = data.portfolios || [];  // Array of {name, included} objects
+      const customOrder = data.customOrder || [];
+      
+      // Apply custom order to portfolios if it exists
+      if (customOrder.length > 0) {
+        const orderedPortfolios = [];
+        const remainingPortfolios = [...portfolios];
+        
+        customOrder.forEach(name => {
+          const portfolio = remainingPortfolios.find(p => p.name === name);
+          if (portfolio) {
+            orderedPortfolios.push(portfolio);
+            remainingPortfolios.splice(remainingPortfolios.indexOf(portfolio), 1);
+          }
+        });
+        
+        portfolios = orderedPortfolios.concat(remainingPortfolios);
+      }
+      
+      renderPortfolios();
+      updateSummary();
+    }
+    
+    function renderPortfolios() {
+      const listElement = document.getElementById('portfolioList');
+      listElement.innerHTML = '';
+      
+      portfolios.forEach((portfolio, index) => {
+        const item = document.createElement('div');
+        item.className = 'portfolio-item' + (portfolio.included === false ? ' disabled' : '');
+        item.draggable = true;
+        item.dataset.index = index;
+        
+        // NEW: Add checkbox
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.className = 'portfolio-checkbox';
+        checkbox.checked = portfolio.included !== false;
+        checkbox.onclick = (e) => {
+          e.stopPropagation();
+          togglePortfolio(index);
+        };
+        
+        const dragHandle = document.createElement('span');
+        dragHandle.className = 'drag-handle';
+        dragHandle.textContent = '☰';
+        
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'portfolio-name';
+        nameSpan.textContent = portfolio.name;
+        
+        item.appendChild(checkbox);
+        item.appendChild(dragHandle);
+        item.appendChild(nameSpan);
+        
+        // Drag events
+        item.addEventListener('dragstart', handleDragStart);
+        item.addEventListener('dragover', handleDragOver);
+        item.addEventListener('drop', handleDrop);
+        item.addEventListener('dragend', handleDragEnd);
+        
+        listElement.appendChild(item);
+      });
+    }
+    
+    // NEW: Toggle portfolio include/exclude
+    function togglePortfolio(index) {
+      portfolios[index].included = !portfolios[index].included;
+      renderPortfolios();
+      updateSummary();
+    }
+    
+    // NEW: Update summary display
+    function updateSummary() {
+      const enabled = portfolios.filter(p => p.included !== false).length;
+      const total = portfolios.length;
+      const disabled = total - enabled;
+      
+      const summaryElement = document.getElementById('summary');
+      summaryElement.innerHTML = `
+        <strong>Status:</strong> ${enabled} of ${total} portfolios enabled
+        ${disabled > 0 ? ` (${disabled} excluded)` : ''}
+      `;
+    }
+    
+    function handleDragStart(e) {
+      draggedElement = this;
+      this.classList.add('dragging');
+      e.dataTransfer.effectAllowed = 'move';
+    }
+    
+    function handleDragOver(e) {
+      if (e.preventDefault) {
+        e.preventDefault();
+      }
+      e.dataTransfer.dropEffect = 'move';
+      return false;
+    }
+    
+    function handleDrop(e) {
+      if (e.stopPropagation) {
+        e.stopPropagation();
+      }
+      
+      if (draggedElement !== this) {
+        const draggedIndex = parseInt(draggedElement.dataset.index);
+        const targetIndex = parseInt(this.dataset.index);
+        
+        const draggedPortfolio = portfolios[draggedIndex];
+        portfolios.splice(draggedIndex, 1);
+        portfolios.splice(targetIndex, 0, draggedPortfolio);
+        
+        renderPortfolios();
+        updateSummary();
+      }
+      
+      return false;
+    }
+    
+    function handleDragEnd(e) {
+      this.classList.remove('dragging');
+    }
+    
+    function saveConfiguration() {
+      // Extract order (names only)
+      const orderArray = portfolios.map(p => p.name);
+      
+      // NEW: Extract include/exclude configuration
+      const includeConfig = {};
+      portfolios.forEach(p => {
+        includeConfig[p.name] = p.included !== false;
+      });
+      
+      // Save both order and include configuration
+      google.script.run
+        .withSuccessHandler(() => {
+          alert('Portfolio configuration saved successfully!');
+          google.script.host.close();
+        })
+        .withFailureHandler(showError)
+        .savePortfolioConfiguration(orderArray, includeConfig);
+    }
+    
+    function showError(error) {
+      alert('Error: ' + error.message);
+    }
+  </script>
+</body>
+</html>

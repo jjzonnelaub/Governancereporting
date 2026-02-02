@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <style>
+      body { font-family: 'Google Sans', 'Roboto', Arial, sans-serif; padding: 20px; background-color: #f8f9fa; }
+      .container { max-width: 450px; margin: 0 auto; }
+      h3 { color: #663399; margin-bottom: 20px; font-weight: 500; }
+      label { display: block; margin-bottom: 5px; font-weight: bold; color: #333; }
+      input, select { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; margin-bottom: 15px; }
+      .button-bar { display: flex; justify-content: space-between; align-items: center; margin-top: 20px; }
+      button { background-color: #663399; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; font-weight: 600; }
+      button:hover { background-color: #552288; }
+      button:disabled { background-color: #ccc; cursor: not-allowed; }
+      .secondary-button { background-color: #6c757d; }
+      .secondary-button:hover { background-color: #5a6268; }
+      #status { margin-top: 15px; color: #555; }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h3>Generate Slideshow</h3>
+      
+      <div>
+        <label for="sheetSelect">Select Program Increment Sheet:</label>
+        <select id="sheetSelect">
+          <option value="">Loading Sheets...</option>
+        </select>
+      </div>
+      
+      <div>
+        <label for="presentationName">New Presentation Name:</label>
+        <input type="text" id="presentationName" value="">
+      </div>
+
+      <div id="status"></div>
+      
+      <div class="button-bar">
+        <button onclick="refreshList()" class="secondary-button" id="refreshBtn">Refresh List</button>
+        <div>
+          <button onclick="generate()" id="generateBtn">Generate</button>
+          <button onclick="google.script.host.close()" class="secondary-button" style="margin-left:10px;">Cancel</button>
+        </div>
+      </div>
+    </div>
+    
+    <script>
+      // Run when the dialog opens to populate the dropdown
+      window.onload = function() {
+        fetchPiSheets();
+      };
+      
+      // FEATURE ADDED: Listen for changes on the dropdown to update the text field
+      document.getElementById('sheetSelect').addEventListener('change', updateDefaultName);
+
+      // Fetches the list of PI sheets from the server
+      function fetchPiSheets() {
+        setLoadingState(true, 'Loading sheet list...');
+        google.script.run
+          .withSuccessHandler(onListLoaded)
+          .withFailureHandler(onError)
+          .getPiSheetNamesWithCache(); // Calls the NEW caching function
+      }
+      
+      // Populates the dropdown once the list is fetched
+      function onListLoaded(sheetNames) {
+        const select = document.getElementById('sheetSelect');
+        select.innerHTML = '<option value="">-- Select a Sheet --</option>';
+        if (sheetNames && sheetNames.length > 0) {
+          sheetNames.forEach(name => {
+            const option = document.createElement('option');
+            option.value = name;
+            option.textContent = name;
+            select.appendChild(option);
+          });
+          document.getElementById('status').textContent = 'Select a sheet to begin.';
+        } else {
+          document.getElementById('status').textContent = 'No "PI # - Governance" sheets found.';
+        }
+        setLoadingState(false);
+      }
+      
+      // Handles the "Generate" button click
+      function generate() {
+        const sheetName = document.getElementById('sheetSelect').value;
+        const presentationName = document.getElementById('presentationName').value;
+        
+        if (!sheetName) {
+          document.getElementById('status').textContent = 'Please select a sheet.'; return;
+        }
+        if (!presentationName) {
+          document.getElementById('status').textContent = 'Please enter a presentation name.'; return;
+        }
+        
+        setLoadingState(true, 'Creating presentation...');
+        google.script.run
+          .withSuccessHandler(onSuccess)
+          .withFailureHandler(onError)
+          .runSlideGeneration(sheetName, presentationName);
+      }
+
+      // FEATURE ADDED: Clears the cache and re-fetches the list
+      function refreshList() {
+        setLoadingState(true, 'Refreshing...');
+        google.script.run
+          .withSuccessHandler(fetchPiSheets) // Re-fetch the list after clearing
+          .withFailureHandler(onError)
+          .clearSheetCache();
+      }
+
+      // FEATURE ADDED: This function now runs whenever the dropdown changes
+      function updateDefaultName() {
+        const select = document.getElementById('sheetSelect');
+        const sheetName = select.value;
+        if (sheetName) {
+          const d = new Date();
+          const dateString = `${d.getMonth()+1}/${d.getDate()}/${d.getFullYear()}`;
+          document.getElementById('presentationName').value = `Program Governance - ${sheetName} - ${dateString}`;
+        } else {
+          document.getElementById('presentationName').value = '';
+        }
+      }
+
+      function setLoadingState(isLoading, message = '') {
+        document.getElementById('generateBtn').disabled = isLoading;
+        document.getElementById('refreshBtn').disabled = isLoading;
+        document.getElementById('status').textContent = message;
+      }
+
+      function onSuccess(resultUrl) {
+        document.getElementById('status').innerHTML = `<b>✅ Success!</b> <a href="${resultUrl}" target="_blank">Click here to open.</a>`;
+        setTimeout(google.script.host.close, 4000);
+      }
+
+      function onError(error) {
+        setLoadingState(false);
+        document.getElementById('status').textContent = 'Error: ' + error.message;
+      }
+    </script>
+  </body>
+</html>

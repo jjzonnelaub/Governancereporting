@@ -1,0 +1,1886 @@
+// ═══════════════════════════════════════════════════════════════════════════════
+// CHANGELOG ANALYSIS FOR ITERATION CHANGES
+// ═══════════════════════════════════════════════════════════════════════════════
+//
+// This file analyzes changes from existing iteration sheets and computes badge
+// flags for slide generation. It is the single source of truth for:
+//   - Change detection between iterations
+//   - Badge computation (NEW, CHG, DONE, DEF, ATRISK)
+//   - Governance filtering
+//
+// No AI dependencies - pure data analysis
+// ═══════════════════════════════════════════════════════════════════════════════
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ENTRY POINTS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Shows the HTML dialog to select PI and iteration for changelog analysis
+ */
+function showComparisonDialog() {
+  const html = HtmlService.createHtmlOutputFromFile('ComparisonDialog.html')
+      .setWidth(450)
+      .setHeight(350);
+  SpreadsheetApp.getUi().showModalDialog(html, 'Analyze Iteration Changes');
+}
+
+/**
+ * Main entry point for changelog analysis
+ * Called from the comparison dialog
+ */
+function runChangeAnalysis(piNumber, iterationNumber) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ui = SpreadsheetApp.getUi();
+  const startTime = Date.now();
+  
+  console.log('\n╔══════════════════════════════════════════════════════════════╗');
+  console.log('║           CHANGELOG ANALYSIS                                 ║');
+  console.log('╠══════════════════════════════════════════════════════════════╣');
+  console.log(`║  PI: ${piNumber}  |  Iteration: ${iterationNumber}  |  ${new Date().toLocaleString()}`);
+  console.log('╚══════════════════════════════════════════════════════════════╝\n');
+  
+  ss.toast(`Starting changelog analysis for PI ${piNumber} Iteration ${iterationNumber}...`, '📊 Analyzing', 30);
+  
+  try {
+    // 1. Check/Create changelog sheet
+    const changelogSheetName = `PI ${piNumber} Changelog`;
+    console.log(`Step 1: Looking for changelog sheet: ${changelogSheetName}`);
+    
+    let changelogSheet = ss.getSheetByName(changelogSheetName);
+    
+    if (!changelogSheet) {
+      console.log(`  Changelog sheet not found. Creating new one...`);
+      ss.toast('Creating new changelog sheet...', '📊 Step 1/4', 15);
+      changelogSheet = createChangelogSheet(piNumber);
+      console.log(`  ✓ Changelog sheet created: ${changelogSheet.getName()}`);
+    } else {
+      console.log(`  ✓ Found existing changelog sheet`);
+    }
+    
+    // 2. Process changes
+    console.log(`Processing iteration ${iterationNumber} changes...`);
+    processIterationChanges(changelogSheet, piNumber, iterationNumber);
+    
+    // Calculate duration
+    const duration = ((Date.now() - startTime) / 1000).toFixed(1);
+    console.log(`\n✅ ANALYSIS COMPLETE in ${duration}s`);
+    
+    // Dismiss working toast and show success
+    ss.toast('', '', 1);
+    Utilities.sleep(300);
+    ss.toast(`Analysis complete in ${duration}s`, '✅ Complete', 5);
+    
+    ui.alert('✅ Complete', 
+      `Changelog analysis complete for PI ${piNumber} Iteration ${iterationNumber}.\n\n` +
+      `Duration: ${duration} seconds\n` +
+      `View results in sheet: ${changelogSheetName}`, 
+      ui.ButtonSet.OK);
+    
+  } catch (e) {
+    console.error('FATAL ERROR in runChangeAnalysis:', e);
+    console.error('Stack trace:', e.stack);
+    ss.toast('', '', 1);
+    ui.alert('Error', e.toString(), ui.ButtonSet.OK);
+  }
+}
+
+/**
+ * Returns analysis status from cache (for progress tracking)
+ */
+function getChangelogAnalysisStatus() {
+  return CacheService.getUserCache().get('changelog_status') || 'Initializing...';
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ITERATION DATE HANDLING
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Gets iteration dates for changelog analysis from Iteration Parameters sheet
+ */
+function getChangelogIterationDates(piNumber, iterationNumber) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName('Iteration Parameters');
+  if (!sheet) throw new Error('Sheet "Iteration Parameters" not found.');
+
+  const data = sheet.getDataRange().getValues();
+  
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    if (row[0] == piNumber && row[1] == iterationNumber) {
+      try {
+        let startDate, endDate;
+        
+        // Handle date values that might be strings or Date objects
+        if (row[2] instanceof Date) {
+          startDate = new Date(row[2]);
+        } else if (typeof row[2] === 'string' && row[2]) {
+          startDate = new Date(row[2]);
+        } else {
+          throw new Error(`Invalid start date in row ${i + 1}: ${row[2]}`);
+        }
+        
+        if (row[3] instanceof Date) {
+          endDate = new Date(row[3]);
+        } else if (typeof row[3] === 'string' && row[3]) {
+          endDate = new Date(row[3]);
+        } else {
+          throw new Error(`Invalid end date in row ${i + 1}: ${row[3]}`);
+        }
+        
+        // Validate dates
+        if (isNaN(startDate.getTime())) {
+          throw new Error(`Invalid start date for PI ${piNumber}, Iteration ${iterationNumber}: ${row[2]}`);
+        }
+        if (isNaN(endDate.getTime())) {
+          throw new Error(`Invalid end date for PI ${piNumber}, Iteration ${iterationNumber}: ${row[3]}`);
+        }
+        
+        // Handle time values if present
+        if (row[4]) {
+          let startTime;
+          if (row[4] instanceof Date) {
+            startTime = new Date(row[4]);
+          } else if (typeof row[4] === 'string') {
+            const timeParts = row[4].toString().match(/(\d{1,2}):(\d{2})/);
+            if (timeParts) {
+              startDate.setHours(parseInt(timeParts[1]), parseInt(timeParts[2]), 0, 0);
+            }
+          }
+          if (startTime && !isNaN(startTime.getTime())) {
+            startDate.setHours(startTime.getHours(), startTime.getMinutes(), 0, 0);
+          }
+        } else {
+          startDate.setHours(9, 1, 0, 0);
+        }
+        
+        if (row[5]) {
+          let endTime;
+          if (row[5] instanceof Date) {
+            endTime = new Date(row[5]);
+          } else if (typeof row[5] === 'string') {
+            const timeParts = row[5].toString().match(/(\d{1,2}):(\d{2})/);
+            if (timeParts) {
+              endDate.setHours(parseInt(timeParts[1]), parseInt(timeParts[2]), 0, 0);
+            }
+          }
+          if (endTime && !isNaN(endTime.getTime())) {
+            endDate.setHours(endTime.getHours(), endTime.getMinutes(), 0, 0);
+          }
+        } else {
+          endDate.setHours(9, 0, 0, 0);
+        }
+        
+        if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
+          throw new Error(`Date calculation failed for PI ${piNumber}, Iteration ${iterationNumber}`);
+        }
+        
+        // Add 3 days to end date for capturing post-iteration changes
+        const analysisEndDate = new Date(endDate.getTime() + (3 * 24 * 60 * 60 * 1000));
+        
+        console.log(`Changelog Window: ${startDate.toString()} to ${analysisEndDate.toString()}`);
+        
+        return { start: startDate, end: analysisEndDate };
+        
+      } catch (e) {
+        console.error(`Error parsing dates for PI ${piNumber}, Iteration ${iterationNumber}:`, e);
+        throw new Error(`Failed to parse iteration dates: ${e.message}`);
+      }
+    }
+  }
+  throw new Error(`Could not find dates for PI ${piNumber}, Iteration ${iterationNumber} in Iteration Parameters sheet.`);
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CHANGELOG SHEET CREATION AND SETUP
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Creates a new changelog sheet for a PI
+ */
+function createChangelogSheet(piNumber) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const iteration1SheetName = `PI ${piNumber} - Iteration 1`;
+  const iteration1Sheet = ss.getSheetByName(iteration1SheetName);
+  
+  if (!iteration1Sheet) {
+    throw new Error(`Cannot find ${iteration1SheetName}. Please generate Iteration 1 report first.`);
+  }
+  
+  const changelogSheetName = `PI ${piNumber} Changelog`;
+  let changelogSheet = ss.getSheetByName(changelogSheetName);
+  
+  if (changelogSheet) {
+    ss.deleteSheet(changelogSheet);
+  }
+  
+  changelogSheet = ss.insertSheet(changelogSheetName);
+  
+  setupChangelogHeaders(changelogSheet, piNumber);
+  importInitialData(changelogSheet, iteration1Sheet);
+  
+  return changelogSheet;
+}
+
+/**
+ * Sets up changelog headers INCLUDING badge columns for each iteration
+ */
+function setupChangelogHeaders(sheet, piNumber) {
+  const trackedFields = getTrackedFields();
+  
+  // Base columns
+  const baseHeaders = ['Key', 'Parent Key', 'Issue Type', 'Summary', 'Added in Iteration', 'Include in Governance'];
+  
+  // Build iteration headers WITH badge columns
+  const iterationHeaders = [];
+  for (let iter = 1; iter <= 6; iter++) {
+    const iterHeaders = getIterationHeadersWithBadges(iter, trackedFields);
+    iterationHeaders.push(...iterHeaders);
+  }
+  
+  const allHeaders = [...baseHeaders, ...iterationHeaders];
+  
+  // Set font for entire sheet
+  sheet.getRange(1, 1, sheet.getMaxRows(), sheet.getMaxColumns()).setFontFamily('Comfortaa');
+  
+  // Write title
+  sheet.getRange('A1').setValue(`PI ${piNumber} Changelog - Iteration Tracking`)
+    .setFontWeight('bold')
+    .setFontSize(16);
+  
+  // Write generation timestamp
+  sheet.getRange('A2').setValue(`Generated: ${new Date().toLocaleString()}`)
+    .setFontStyle('italic')
+    .setFontSize(10);
+  
+  // Write last run timestamp
+  sheet.getRange('A3').setValue(`Last Run: ${new Date().toLocaleString()}`)
+    .setFontWeight('bold')
+    .setFontStyle('italic')
+    .setFontSize(10)
+    .setFontColor('#d32f2f');
+  
+  // Write headers in row 5
+  sheet.getRange(5, 1, 1, allHeaders.length).setValues([allHeaders])
+    .setFontWeight('bold')
+    .setBackground('#9b7bb8')
+    .setFontColor('white');
+  
+  // Add data validation for governance column
+  const validationRule = SpreadsheetApp.newDataValidation()
+    .requireValueInList(['Yes', 'No'], true)
+    .setAllowInvalid(false)
+    .build();
+  sheet.getRange(6, 6, sheet.getMaxRows() - 5, 1).setDataValidation(validationRule);
+  
+  // Set column widths for base columns
+  sheet.setColumnWidth(1, 100);  // Key
+  sheet.setColumnWidth(2, 100);  // Parent Key
+  sheet.setColumnWidth(3, 100);  // Issue Type
+  sheet.setColumnWidth(4, 400);  // Summary
+  sheet.setColumnWidth(5, 120);  // Added in Iteration
+  sheet.setColumnWidth(6, 140);  // Include in Governance
+  
+  // Set widths for iteration columns
+  for (let col = 7; col <= allHeaders.length; col++) {
+    sheet.setColumnWidth(col, 150);
+  }
+  
+  // Freeze header rows and key columns
+  sheet.setFrozenRows(5);
+  sheet.setFrozenColumns(4);
+}
+
+/**
+ * Returns iteration headers INCLUDING badge columns
+ */
+function getIterationHeadersWithBadges(iterNumber, trackedFields) {
+  const iterPrefix = `Iteration ${iterNumber}`;
+  const headers = [];
+  
+  if (iterNumber === 1) {
+    // Iteration 1 only has NO CHANGES column (baseline)
+    headers.push(`${iterPrefix} - NO CHANGES`);
+  } else {
+    // Field change columns
+    trackedFields.forEach(field => {
+      headers.push(`${iterPrefix} - ${field}`);
+    });
+    
+    // NO CHANGES column
+    headers.push(`${iterPrefix} - NO CHANGES`);
+    
+    // Badge columns
+    headers.push(`${iterPrefix} - Badge`);
+    headers.push(`${iterPrefix} - Status Badge`);
+    headers.push(`${iterPrefix} - Status Note`);
+    headers.push(`${iterPrefix} - At Risk`);
+    headers.push(`${iterPrefix} - Iteration Risk`);
+    headers.push(`${iterPrefix} - Closed This Iter`);
+    headers.push(`${iterPrefix} - Deferred This Iter`);
+    headers.push(`${iterPrefix} - Canceled This Iter`);  // NEW: Canceled tracking
+    headers.push(`${iterPrefix} - Is New`);
+    headers.push(`${iterPrefix} - Qualifying Reasons`);
+  }
+  
+  return headers;
+}
+/**
+ * Imports initial data from Iteration 1 sheet into changelog
+ */
+function importInitialData(changelogSheet, iteration1Sheet) {
+  const jiraConfig = getJiraConfig();
+  const headers = iteration1Sheet.getRange(4, 1, 1, iteration1Sheet.getLastColumn()).getValues()[0];
+  
+  const keyCol = headers.indexOf('Key');
+  const parentKeyCol = headers.indexOf('Parent Key');
+  const issueTypeCol = headers.indexOf('Issue Type');
+  const summaryCol = headers.indexOf('Summary');
+  const allocationCol = headers.indexOf('Allocation');
+  const portfolioCol = headers.indexOf('Portfolio Initiative');
+  
+  if (keyCol === -1) {
+    throw new Error('Cannot find required columns in Iteration 1 sheet');
+  }
+  
+  const lastRow = iteration1Sheet.getLastRow();
+  if (lastRow < 5) return;
+  
+  const data = iteration1Sheet.getRange(5, 1, lastRow - 4, iteration1Sheet.getLastColumn()).getValues();
+  
+  const keyFormulas = [];
+  const parentKeyFormulas = [];
+  const summaryFormulas = [];
+  const plainData = [];
+  
+  // First pass: Build epic governance map
+  const epicGovernanceMap = {};
+  data.forEach(row => {
+    const key = row[keyCol];
+    const issueType = row[issueTypeCol] || '';
+    
+    if (key && issueType === 'Epic') {
+      const allocation = allocationCol >= 0 ? (row[allocationCol] || '') : '';
+      const portfolioInitiative = portfolioCol >= 0 ? (row[portfolioCol] || '') : '';
+      epicGovernanceMap[key] = shouldIncludeInGovernance(allocation, portfolioInitiative);
+    }
+  });
+  
+  // Second pass: Process all rows
+  data.forEach(row => {
+    if (row[keyCol] && row[keyCol] !== '') {
+      const key = row[keyCol];
+      const parentKey = row[parentKeyCol] || '';
+      const summary = row[summaryCol] || '';
+      const issueType = row[issueTypeCol] || '';
+      
+      // Determine governance inclusion
+      let includeInGovernance;
+      if (issueType === 'Epic') {
+        includeInGovernance = epicGovernanceMap[key] || 'Yes';
+      } else if (issueType === 'Dependency') {
+        includeInGovernance = epicGovernanceMap[parentKey] || 'Yes';
+      } else {
+        includeInGovernance = 'Yes';
+      }
+      
+      // Create hyperlink formulas
+      keyFormulas.push([`=HYPERLINK("${jiraConfig.baseUrl}/browse/${key}","${key}")`]);
+      parentKeyFormulas.push([parentKey ? `=HYPERLINK("${jiraConfig.baseUrl}/browse/${parentKey}","${parentKey}")` : '']);
+      
+      const cleanSummary = summary.toString().replace(/"/g, '""');
+      summaryFormulas.push([`=HYPERLINK("${jiraConfig.baseUrl}/browse/${key}","${cleanSummary}")`]);
+      
+      plainData.push([issueType, '1', includeInGovernance]);
+    }
+  });
+  
+  if (keyFormulas.length > 0) {
+    changelogSheet.getRange(6, 1, keyFormulas.length, 1).setFormulas(keyFormulas);
+    changelogSheet.getRange(6, 2, parentKeyFormulas.length, 1).setFormulas(parentKeyFormulas);
+    changelogSheet.getRange(6, 4, summaryFormulas.length, 1).setFormulas(summaryFormulas);
+    
+    changelogSheet.getRange(6, 3, plainData.length, 1).setValues(plainData.map(d => [d[0]]));
+    changelogSheet.getRange(6, 5, plainData.length, 1).setValues(plainData.map(d => [d[1]]));
+    changelogSheet.getRange(6, 6, plainData.length, 1).setValues(plainData.map(d => [d[2]]));
+    
+    // Mark all as baseline in Iteration 1 NO CHANGES column (column 7)
+    const baselineValues = new Array(plainData.length).fill(['Baseline']);
+    changelogSheet.getRange(6, 7, baselineValues.length, 1).setValues(baselineValues);
+    
+    applyAlternatingRowColors(changelogSheet, 6, plainData.length);
+  }
+  
+  updateLastRunTimestamp(changelogSheet);
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CHANGE PROCESSING
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Processes changes for a specific iteration
+ */
+function processIterationChanges(changelogSheet, piNumber, iterationNumber) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  
+  console.log(`\n--- PROCESSING ITERATION ${iterationNumber} ---`);
+  
+  // Force cache flush
+  console.log(`  🔄 Flushing Google Sheets cache...`);
+  SpreadsheetApp.flush();
+  
+  // 1. Get iteration sheet
+  ss.toast('Reading iteration data...', '📊 Step 2/4', 15);
+  const iterationSheetName = `PI ${piNumber} - Iteration ${iterationNumber}`;
+  const iterationSheet = ss.getSheetByName(iterationSheetName);
+  
+  if (!iterationSheet) {
+    throw new Error(`Sheet "${iterationSheetName}" not found. Please generate the iteration report first.`);
+  }
+  
+  // 2. Get current changelog data
+  const changelogData = getChangelogDataFromSheet(changelogSheet);
+  changelogData.piNumber = piNumber;
+  
+  // 3. Get iteration data
+  const iterationIssues = getIterationSheetData(iterationSheet);
+  
+  // 4. Find and add new issues
+  ss.toast('Checking for new issues...', '📊 Step 3/4', 15);
+  const newIssues = findNewIssues(changelogData, iterationIssues, iterationNumber);
+  
+  if (newIssues.length > 0) {
+    console.log(`Found ${newIssues.length} new issues`);
+    addNewIssuesToChangelog(changelogSheet, newIssues, iterationNumber);
+    changelogData.issues = [...changelogData.issues, ...newIssues];
+  }
+  
+  if (iterationNumber === 1) {
+    console.log(`Iteration 1 - marking all as baseline`);
+    ss.toast('Marking baseline for Iteration 1...', '📊 Step 4/4', 15);
+    markIteration1Baseline(changelogSheet);
+  } else {
+    // 5. Get date range and fetch changelogs
+    const { start: startDate, end: endDate } = getChangelogIterationDates(piNumber, iterationNumber);
+    
+    const totalIssues = changelogData.issues.length;
+    ss.toast(`Fetching changelogs for ${totalIssues} issues...`, '📊 Step 4/4', 180);
+    
+    const changes = fetchAndAnalyzeChanges(changelogData.issues, startDate, endDate);
+    
+    // 6. Write changes to changelog
+    ss.toast('Writing changes to changelog...', '📊 Finalizing', 15);
+    writeChangesToChangelog(changelogSheet, changes, iterationNumber, changelogData);
+  }
+  
+  updateLastRunTimestamp(changelogSheet);
+}
+
+/**
+ * Reads changelog data from sheet
+ */
+function getChangelogDataFromSheet(sheet) {
+  const lastRow = sheet.getLastRow();
+  
+  if (lastRow < 6) {
+    return { issues: [], keyToRow: {} };
+  }
+  
+  const data = sheet.getRange(6, 1, lastRow - 5, 6).getValues();
+  const issues = [];
+  const keyToRow = {};
+  
+  data.forEach((row, index) => {
+    if (row[0]) {
+      const issue = {
+        key: row[0],
+        parentKey: row[1],
+        issueType: row[2],
+        summary: row[3],
+        addedInIteration: row[4],
+        includeInGovernance: row[5] || 'Yes',
+        row: index + 6
+      };
+      issues.push(issue);
+      keyToRow[row[0]] = index + 6;
+    }
+  });
+  
+  return { issues, keyToRow };
+}
+
+/**
+ * Gets iteration sheet data as array of issues
+ */
+function getIterationSheetData(sheet) {
+  const headers = sheet.getRange(4, 1, 1, sheet.getLastColumn()).getValues()[0];
+  
+  const keyCol = headers.indexOf('Key');
+  const parentKeyCol = headers.indexOf('Parent Key');
+  const issueTypeCol = headers.indexOf('Issue Type');
+  const summaryCol = headers.indexOf('Summary');
+  const allocationCol = headers.indexOf('Allocation');
+  const portfolioCol = headers.indexOf('Portfolio Initiative');
+  
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 5) return [];
+  
+  const data = sheet.getRange(5, 1, lastRow - 4, sheet.getLastColumn()).getValues();
+  const issues = [];
+  
+  data.forEach(row => {
+    if (row[keyCol]) {
+      issues.push({
+        key: row[keyCol],
+        parentKey: row[parentKeyCol] || '',
+        issueType: row[issueTypeCol] || '',
+        summary: row[summaryCol] || '',
+        allocation: allocationCol >= 0 ? (row[allocationCol] || '') : '',
+        portfolioInitiative: portfolioCol >= 0 ? (row[portfolioCol] || '') : ''
+      });
+    }
+  });
+  
+  return issues;
+}
+
+/**
+ * Finds new issues that aren't in changelog yet
+ */
+function findNewIssues(changelogData, iterationData, iterationNumber) {
+  const existingKeys = new Set(changelogData.issues.map(i => i.key));
+  const newIssues = [];
+  
+  // Build epic governance map
+  const epicGovernanceMap = {};
+  iterationData.forEach(issue => {
+    if (!existingKeys.has(issue.key) && issue.issueType === 'Epic') {
+      epicGovernanceMap[issue.key] = shouldIncludeInGovernance(issue.allocation, issue.portfolioInitiative);
+    }
+  });
+  
+  // Include existing epic governance for dependency lookups
+  changelogData.issues.forEach(issue => {
+    if (issue.issueType === 'Epic' && issue.includeInGovernance) {
+      epicGovernanceMap[issue.key] = issue.includeInGovernance;
+    }
+  });
+  
+  iterationData.forEach(issue => {
+    if (!existingKeys.has(issue.key)) {
+      let includeInGovernance;
+      if (issue.issueType === 'Epic') {
+        includeInGovernance = epicGovernanceMap[issue.key] || 'Yes';
+      } else if (issue.issueType === 'Dependency') {
+        includeInGovernance = epicGovernanceMap[issue.parentKey] || 'Yes';
+      } else {
+        includeInGovernance = 'Yes';
+      }
+      
+      newIssues.push({
+        ...issue,
+        addedInIteration: iterationNumber.toString(),
+        includeInGovernance: includeInGovernance
+      });
+    }
+  });
+  
+  return newIssues;
+}
+
+/**
+ * Adds new issues to the changelog sheet
+ */
+function addNewIssuesToChangelog(sheet, newIssues, iterationNumber) {
+  if (!newIssues || newIssues.length === 0) return;
+  
+  const jiraConfig = getJiraConfig();
+  const lastRow = sheet.getLastRow();
+  const startRow = lastRow + 1;
+  
+  const keyFormulas = [];
+  const parentKeyFormulas = [];
+  const summaryFormulas = [];
+  const plainData = [];
+  
+  newIssues.forEach(issue => {
+    keyFormulas.push([`=HYPERLINK("${jiraConfig.baseUrl}/browse/${issue.key}","${issue.key}")`]);
+    
+    const parentKey = issue.parentKey || '';
+    parentKeyFormulas.push([parentKey ? `=HYPERLINK("${jiraConfig.baseUrl}/browse/${parentKey}","${parentKey}")` : '']);
+    
+    const cleanSummary = (issue.summary || '').toString().replace(/"/g, '""');
+    summaryFormulas.push([`=HYPERLINK("${jiraConfig.baseUrl}/browse/${issue.key}","${cleanSummary}")`]);
+    
+    plainData.push([
+      issue.issueType || '',
+      issue.addedInIteration || iterationNumber.toString(),
+      issue.includeInGovernance || 'Yes'
+    ]);
+  });
+  
+  sheet.getRange(startRow, 1, keyFormulas.length, 1).setFormulas(keyFormulas);
+  sheet.getRange(startRow, 2, parentKeyFormulas.length, 1).setFormulas(parentKeyFormulas);
+  sheet.getRange(startRow, 4, summaryFormulas.length, 1).setFormulas(summaryFormulas);
+  
+  sheet.getRange(startRow, 3, plainData.length, 1).setValues(plainData.map(d => [d[0]]));
+  sheet.getRange(startRow, 5, plainData.length, 1).setValues(plainData.map(d => [d[1]]));
+  sheet.getRange(startRow, 6, plainData.length, 1).setValues(plainData.map(d => [d[2]]));
+  
+  applyAlternatingRowColors(sheet, startRow, newIssues.length);
+}
+
+/**
+ * Marks all items in Iteration 1 as baseline
+ */
+function markIteration1Baseline(changelogSheet) {
+  const lastRow = changelogSheet.getLastRow();
+  if (lastRow < 6) return;
+  
+  const iter1Col = 7;
+  const numRows = lastRow - 5;
+  const baselineValues = new Array(numRows).fill(['Baseline']);
+  
+  changelogSheet.getRange(6, iter1Col, numRows, 1).setValues(baselineValues);
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// JIRA CHANGELOG FETCHING
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Fetches and analyzes JIRA changelogs for all issues
+ */
+function fetchAndAnalyzeChanges(issues, startDate, endDate) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  
+  // Only fetch for issues included in governance
+  const includedIssues = issues.filter(i => i.includeInGovernance !== 'No');
+  const excludedCount = issues.length - includedIssues.length;
+  
+  console.log(`\n========== CHANGELOG ANALYSIS ==========`);
+  console.log(`  Total issues: ${issues.length}`);
+  console.log(`  Included in governance: ${includedIssues.length}`);
+  console.log(`  Excluded: ${excludedCount}`);
+  
+  if (includedIssues.length === 0) {
+    return {};
+  }
+  
+  const issueKeys = includedIssues.map(i => i.key);
+  const startTime = Date.now();
+  
+  ss.toast(`Fetching changelogs for ${issueKeys.length} issues...`, '⚡ Processing', 60);
+  const issuesWithChangelogs = fetchChangelogsForIssues(issueKeys, startDate, endDate);
+  
+  const fetchTime = Date.now() - startTime;
+  console.log(`  ⏱️ Fetch completed in ${(fetchTime/1000).toFixed(1)}s`);
+  
+  // Analyze changelogs
+  const changesByKey = {};
+  let totalChangesInWindow = 0;
+  
+  issuesWithChangelogs.forEach(issue => {
+    if (!issue.changelog || !issue.changelog.histories) return;
+    
+    const changes = [];
+    
+    issue.changelog.histories.forEach(history => {
+      const changeDate = new Date(history.created);
+      
+      if (changeDate >= startDate && changeDate <= endDate) {
+        history.items.forEach(item => {
+          changes.push({
+            field: item.field,
+            fieldId: item.fieldId,
+            from: item.fromString || '',
+            to: item.toString || '',
+            date: changeDate
+          });
+          totalChangesInWindow++;
+        });
+      }
+    });
+    
+    if (changes.length > 0) {
+      changesByKey[issue.key] = changes;
+    }
+  });
+  
+  console.log(`  Issues with changes: ${Object.keys(changesByKey).length}`);
+  console.log(`  Total changes in window: ${totalChangesInWindow}`);
+  
+  return changesByKey;
+}
+
+/**
+ * Fetches JIRA changelogs for specific issues using parallel requests
+ */
+function fetchChangelogsForIssues(issueKeys, startDate, endDate) {
+  const jiraConfig = getJiraConfig();
+  const userCache = CacheService.getUserCache();
+  const headers = getJiraHeaders();
+  
+  const BATCH_SIZE = 70;
+  const PARALLEL_BATCHES = 8;
+  
+  console.log(`  ⚡ Fetching ${issueKeys.length} issues in batches of ${BATCH_SIZE}`);
+  
+  const allIssues = [];
+  
+  // Build date filter for JQL
+  let dateFilter = '';
+  if (startDate && endDate) {
+    const startStr = Utilities.formatDate(startDate, 'GMT', "yyyy-MM-dd");
+    const endStr = Utilities.formatDate(endDate, 'GMT', "yyyy-MM-dd");
+    dateFilter = ` AND updated >= "${startStr}" AND updated <= "${endStr}"`;
+  }
+  
+  // Process in parallel batches
+  for (let groupStart = 0; groupStart < issueKeys.length; groupStart += BATCH_SIZE * PARALLEL_BATCHES) {
+    const requests = [];
+    
+    for (let b = 0; b < PARALLEL_BATCHES; b++) {
+      const batchStart = groupStart + (b * BATCH_SIZE);
+      if (batchStart >= issueKeys.length) break;
+      
+      const batch = issueKeys.slice(batchStart, batchStart + BATCH_SIZE);
+      const jql = `key IN (${batch.map(k => `"${k}"`).join(',')})${dateFilter}`;
+      
+      const url = `${jiraConfig.baseUrl}/rest/api/3/search/jql?` +
+                  `jql=${encodeURIComponent(jql)}` +
+                  `&expand=changelog` +
+                  `&maxResults=${BATCH_SIZE}` +
+                  `&fields=key,summary,issuetype,status`;
+      
+      requests.push({
+        url: url,
+        method: 'GET',
+        headers: headers,
+        muteHttpExceptions: true
+      });
+    }
+    
+    const progress = Math.min(groupStart + (BATCH_SIZE * PARALLEL_BATCHES), issueKeys.length);
+    userCache.put('changelog_status', `Fetching changelogs (${progress}/${issueKeys.length})...`, 120);
+    
+    try {
+      const responses = UrlFetchApp.fetchAll(requests);
+      
+      responses.forEach(response => {
+        if (response.getResponseCode() === 200) {
+          const data = JSON.parse(response.getContentText());
+          if (data.issues) {
+            allIssues.push(...data.issues);
+          }
+        }
+      });
+    } catch(e) {
+      console.error(`  Parallel fetch failed: ${e.message}`);
+    }
+    
+    Utilities.sleep(100);
+  }
+  
+  userCache.put('changelog_status', 'Analyzing changes...', 120);
+  return allIssues;
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// WRITING CHANGES TO CHANGELOG
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Main function to write changes to changelog sheet
+ * Also computes and writes badge flags
+ */
+function writeChangesToChangelog(sheet, changesByKey, iterationNumber, changelogData) {
+  const startTime = Date.now();
+  console.log(`\n═══════════════════════════════════════════════════════════════`);
+  console.log(`  WRITING CHANGES FOR ITERATION ${iterationNumber}`);
+  console.log(`═══════════════════════════════════════════════════════════════`);
+  
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  SpreadsheetApp.flush();
+  
+  const lastRow = sheet.getLastRow();
+  const lastCol = sheet.getLastColumn();
+  
+  // Headers are in row 5
+  const headers = sheet.getRange(5, 1, 1, lastCol).getValues()[0];
+  const headerIndexMap = {};
+  headers.forEach((header, index) => {
+    headerIndexMap[header] = index;
+  });
+  
+  const trackedFields = getTrackedFields();
+  
+  // Find key columns
+  const noChangeHeader = `Iteration ${iterationNumber} - NO CHANGES`;
+  const noChangeColIndex = headerIndexMap[noChangeHeader];
+  
+  // Build field column map
+  const fieldColumnMap = {};
+  trackedFields.forEach(field => {
+    const columnHeader = `Iteration ${iterationNumber} - ${field}`;
+    const colIndex = headerIndexMap[columnHeader];
+    if (colIndex !== undefined) {
+      fieldColumnMap[field] = colIndex;
+    }
+  });
+  
+  // Load iteration sheet data for comparison
+  const piNumber = changelogData.piNumber;
+  const currIterSheetName = `PI ${piNumber} - Iteration ${iterationNumber}`;
+  const prevIterSheetName = `PI ${piNumber} - Iteration ${iterationNumber - 1}`;
+  
+  let currIterData = {};
+  let prevIterData = {};
+  
+  const currIterSheet = ss.getSheetByName(currIterSheetName);
+  if (currIterSheet) {
+    currIterData = loadIterationSheetAsMap_(currIterSheet);
+  }
+  
+  if (iterationNumber > 1) {
+    const prevIterSheet = ss.getSheetByName(prevIterSheetName);
+    if (prevIterSheet) {
+      prevIterData = loadIterationSheetAsMap_(prevIterSheet);
+    }
+  }
+  
+  // Qualifying fields for governance report
+  const fieldsToCompare = ['Status', 'RAG', 'RAG Note', 'PI Commitment', 'Iteration End', 'Fix Versions'];
+  
+  // Batch read all data
+  const dataStartRow = 6;
+  const numDataRows = lastRow - dataStartRow + 1;
+  
+  if (numDataRows <= 0) return;
+  
+  const allData = sheet.getRange(dataStartRow, 1, numDataRows, lastCol).getValues();
+  
+  // Clear iteration columns first
+  const iterationPrefix = `Iteration ${iterationNumber} - `;
+  headers.forEach((header, index) => {
+    if (header.startsWith(iterationPrefix)) {
+      allData.forEach(row => { row[index] = ''; });
+    }
+  });
+  
+  // Build key to array index map
+  const keyColIndex = headerIndexMap['Key'] || 0;
+  const keyToArrayIndex = {};
+  allData.forEach((row, arrayIndex) => {
+    let keyValue = row[keyColIndex];
+    if (typeof keyValue === 'string' && keyValue.includes('HYPERLINK')) {
+      const match = keyValue.match(/,"([^"]+)"\)$/);
+      if (match) keyValue = match[1];
+    }
+    if (keyValue) {
+      keyToArrayIndex[keyValue] = arrayIndex;
+    }
+  });
+  
+  // Stats
+  let hasChangeCount = 0;
+  let noChangeCount = 0;
+  
+  // Process each issue
+  changelogData.issues.forEach(issue => {
+    const arrayIndex = keyToArrayIndex[issue.key];
+    if (arrayIndex === undefined) return;
+    
+    const rowIndex = arrayIndex;
+    if (rowIndex < 0 || rowIndex >= allData.length) return;
+    
+    // Step 1: Write JIRA changelog events
+    const changes = changesByKey[issue.key];
+    let hasJiraChanges = false;
+    
+    if (changes && changes.length > 0) {
+      changes.forEach(change => {
+        const fieldName = getFieldNameFromChange(change, trackedFields);
+        if (fieldName) {
+          const colIndex = fieldColumnMap[fieldName];
+          if (colIndex !== undefined && !allData[rowIndex][colIndex]) {
+            allData[rowIndex][colIndex] = change.to || '(empty)';
+            if (fieldsToCompare.includes(fieldName)) {
+              hasJiraChanges = true;
+            }
+          }
+        }
+      });
+    }
+    
+    // Step 2: Compare iteration sheet values
+    let hasValueDifference = false;
+    const currItem = currIterData[issue.key] || {};
+    const prevItem = prevIterData[issue.key] || {};
+    
+    if (iterationNumber > 1 && Object.keys(prevIterData).length > 0) {
+      for (const field of fieldsToCompare) {
+        const currValue = normalizeValue_(currItem[field]);
+        const prevValue = normalizeValue_(prevItem[field]);
+        
+        if (currValue !== prevValue) {
+          // Apply business rules for qualifying changes
+          if (field === 'Status') {
+            const currUpper = currValue.toUpperCase();
+            if (currUpper !== 'CLOSED' && currUpper !== 'DONE') continue;
+          }
+          if (field === 'RAG') {
+            if (prevValue === '' && currValue.toUpperCase().includes('GREEN')) continue;
+          }
+          if (field === 'Iteration End' || field === 'Fix Versions') {
+            if (prevValue === '' && currValue !== '') continue;
+          }
+          
+          hasValueDifference = true;
+          
+          const colIndex = fieldColumnMap[field];
+          if (colIndex !== undefined && !allData[rowIndex][colIndex]) {
+            allData[rowIndex][colIndex] = currValue || '(empty)';
+          }
+          break;
+        }
+      }
+    }
+    
+    // Step 3: Set NO CHANGES flag
+    const hasAnyChanges = hasJiraChanges || hasValueDifference;
+    
+    if (noChangeColIndex !== undefined) {
+      if (hasAnyChanges) {
+        allData[rowIndex][noChangeColIndex] = '';
+        hasChangeCount++;
+      } else {
+        allData[rowIndex][noChangeColIndex] = 'NO CHANGES';
+        noChangeCount++;
+      }
+    }
+  });
+  
+  // Batch write
+  sheet.getRange(dataStartRow, 1, numDataRows, lastCol).setValues(allData);
+  
+  console.log(`  Issues WITH changes: ${hasChangeCount}`);
+  console.log(`  Issues WITHOUT changes: ${noChangeCount}`);
+  
+  // ═══════════════════════════════════════════════════════════════════════════
+  // COMPUTE AND WRITE BADGE FLAGS
+  // ═══════════════════════════════════════════════════════════════════════════
+  if (iterationNumber > 1) {
+    writeBadgeFlagsToChangelog(sheet, changelogData, iterationNumber, changesByKey, currIterData, prevIterData);
+  }
+  
+  // Apply colors
+  applyIterationColumnColors(sheet, iterationNumber);
+  
+  console.log(`  ⏱️ TOTAL TIME: ${((Date.now() - startTime)/1000).toFixed(1)}s`);
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// BADGE COMPUTATION
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Computes badge flags for an item based on Status/Resolution rules
+ * 
+ * Badge Priority: DEF > DONE > NEW > CHG > ATRISK
+ * 
+ * Status/Resolution Matrix:
+ * - Status = Closed + Resolution = Done/Fixed → DONE badge
+ * - Status = Closed + Resolution ≠ Done/Fixed → DEF badge + note
+ * - Status = Pending Acceptance → DONE badge + note
+ * - PI Commitment = Deferred/Canceled → DEF badge
+ */
+function computeBadgeFlags(currItem, prevItem, iterationNumber, hasQualifyingChanges, issueType, jiraChanges) {
+  const result = {
+    badge: '',
+    statusBadge: '',
+    statusNote: '',
+    isNew: false,
+    isModified: false,
+    isDone: false,
+    isPendingClosure: false,
+    isDeferred: false,
+    isCanceled: false,
+    isOverdue: false,
+    isAtRisk: false,
+    isIterationRisk: false,
+    closedThisIteration: false,
+    pendingClosureThisIteration: false,
+    deferredThisIteration: false,
+    canceledThisIteration: false,
+    alreadyClosed: false,
+    alreadyPendingClosure: false,
+    alreadyDeferred: false,
+    alreadyCanceled: false,
+    canceledReason: '',
+    qualifyingReasons: [],
+    badgeReason: ''
+  };
+  
+  // Normalize values
+  const currStatus = normalizeBadgeValue_(currItem['Status']);
+  const prevStatus = normalizeBadgeValue_(prevItem['Status']);
+  const currResolution = normalizeBadgeValue_(currItem['Resolution']);
+  const prevResolution = normalizeBadgeValue_(prevItem['Resolution']);
+  const currPICommitment = normalizeBadgeValue_(currItem['PI Commitment']);
+  const prevPICommitment = normalizeBadgeValue_(prevItem['PI Commitment']);
+  const currRAG = normalizeBadgeValue_(currItem['RAG']);
+  const prevRAG = normalizeBadgeValue_(prevItem['RAG']);
+  const currEndIter = normalizeBadgeValue_(currItem['End Iteration Name'] || currItem['PI Target Iteration']);
+  const prevEndIter = normalizeBadgeValue_(prevItem['End Iteration Name'] || prevItem['PI Target Iteration']);
+  const currRagNote = normalizeBadgeValue_(currItem['RAG Note']);
+  const prevRagNote = normalizeBadgeValue_(prevItem['RAG Note']);
+  const currFixVersions = normalizeBadgeValue_(currItem['Fix Versions']);
+  const prevFixVersions = normalizeBadgeValue_(prevItem['Fix Versions']);
+  
+  const currStatusUpper = currStatus.toUpperCase();
+  const prevStatusUpper = prevStatus.toUpperCase();
+  const currResolutionUpper = currResolution.toUpperCase();
+  const prevResolutionUpper = prevResolution.toUpperCase();
+  const currPICommitmentUpper = currPICommitment.toUpperCase();
+  const prevPICommitmentUpper = prevPICommitment.toUpperCase();
+  const currRAGUpper = currRAG.toUpperCase();
+  
+  // ═══════════════════════════════════════════════════════════════════════════
+  // STEP 1: Check if NEW
+  // ═══════════════════════════════════════════════════════════════════════════
+  const isFirstAppearance = Object.keys(prevItem).length === 0;
+  const committedValues = ['COMMITTED', 'COMMITTED AFTER PLAN', 'COMMITTED AFTER PLANNING'];
+  const wasNotCommitted = !committedValues.includes(prevPICommitmentUpper);
+  const isNowCommitted = committedValues.includes(currPICommitmentUpper);
+  const newlyCommitted = !isFirstAppearance && wasNotCommitted && isNowCommitted;
+  
+  if (isFirstAppearance) {
+    result.isNew = true;
+    result.qualifyingReasons.push('New this iteration');
+  } else if (newlyCommitted) {
+    result.isNew = true;
+    result.qualifyingReasons.push(`PI Commitment: ${prevPICommitment || '(blank)'} → ${currPICommitment}`);
+  }
+  
+  // ═══════════════════════════════════════════════════════════════════════════
+  // STEP 2: Check CANCELED (PI Commitment = Canceled/Cancelled)
+  // ═══════════════════════════════════════════════════════════════════════════
+  const canceledCommitments = ['CANCELED', 'CANCELLED'];
+  const isNowCanceledByCommitment = canceledCommitments.includes(currPICommitmentUpper);
+  const wasCanceledByCommitment = canceledCommitments.includes(prevPICommitmentUpper);
+  
+  if (isNowCanceledByCommitment) {
+    result.isCanceled = true;
+    result.canceledReason = `PI Commitment: ${currPICommitment}`;
+    
+    if (!wasCanceledByCommitment && !isFirstAppearance) {
+      result.canceledThisIteration = true;
+      result.qualifyingReasons.push(`PI Commitment: ${prevPICommitment || '(blank)'} → ${currPICommitment}`);
+    } else if (wasCanceledByCommitment) {
+      result.alreadyCanceled = true;
+    }
+  }
+  
+  // ═══════════════════════════════════════════════════════════════════════════
+  // STEP 3: Check PI Commitment for DEFERRED (excludes CANCELED)
+  // ═══════════════════════════════════════════════════════════════════════════
+  const deferredCommitments = ['DEFERRED', 'TRADED', 'NOT COMMITTED'];
+  const isNowDeferredByCommitment = deferredCommitments.includes(currPICommitmentUpper);
+  const wasDeferredByCommitment = deferredCommitments.includes(prevPICommitmentUpper);
+  
+  if (isNowDeferredByCommitment && !result.isCanceled) {
+    result.isDeferred = true;
+    if (!wasDeferredByCommitment && !isFirstAppearance) {
+      result.deferredThisIteration = true;
+      result.qualifyingReasons.push(`PI Commitment: ${prevPICommitment || '(blank)'} → ${currPICommitment}`);
+    } else if (wasDeferredByCommitment) {
+      result.alreadyDeferred = true;
+    }
+  }
+  
+  // ═══════════════════════════════════════════════════════════════════════════
+  // STEP 4: Check Status/Resolution for DONE, PENDING, or CANCELED
+  // ═══════════════════════════════════════════════════════════════════════════
+  const closedStatuses = ['CLOSED', 'DONE'];
+  const isNowClosed = closedStatuses.includes(currStatusUpper);
+  const wasNotClosed = !closedStatuses.includes(prevStatusUpper);
+  const wasClosed = closedStatuses.includes(prevStatusUpper);
+  
+  const isPendingAcceptance = currStatusUpper === 'PENDING ACCEPTANCE';
+  const wasPendingAcceptance = prevStatusUpper === 'PENDING ACCEPTANCE';
+  
+  // Pending Acceptance → PENDING badge (Pending Closure)
+  // Only if NOT already deferred or canceled by PI Commitment
+  if (isPendingAcceptance && !result.isCanceled && !result.isDeferred) {
+    result.isPendingClosure = true;
+    result.statusBadge = 'PENDING';
+    result.statusNote = 'Pending Acceptance - awaiting closure';
+    
+    if (!wasPendingAcceptance && !isFirstAppearance) {
+      result.pendingClosureThisIteration = true;
+      result.qualifyingReasons.push(`Status: ${prevStatus || '(blank)'} → Pending Acceptance`);
+    } else if (wasPendingAcceptance) {
+      result.alreadyPendingClosure = true;
+    }
+  }
+  // Closed with valid resolution → DONE badge
+  // Only if NOT already deferred or canceled by PI Commitment
+  else if (isNowClosed && !result.isCanceled && !result.isDeferred) {
+    const validResolutions = ['DONE', 'FIXED', ''];
+    const hasValidResolution = validResolutions.includes(currResolutionUpper);
+    
+    if (hasValidResolution) {
+      result.isDone = true;
+      result.statusBadge = 'DONE';
+      
+      // Track transition from Pending Acceptance OR from other status
+      if (wasPendingAcceptance && !isFirstAppearance) {
+        result.closedThisIteration = true;
+        result.qualifyingReasons.push(`Status: Pending Acceptance → ${currStatus}`);
+      } else if (wasNotClosed && !isFirstAppearance) {
+        result.closedThisIteration = true;
+        result.qualifyingReasons.push(`Status: ${prevStatus || '(blank)'} → ${currStatus}`);
+      } else if (wasClosed) {
+        result.alreadyClosed = true;
+      }
+    } else {
+      // Closed with invalid resolution → CANCELED badge
+      result.isCanceled = true;
+      result.statusBadge = 'CANCELED';
+      result.canceledReason = `Resolution: ${currResolution}`;
+      result.statusNote = `Closed with resolution: ${currResolution}`;
+      
+      const prevHadBadResolution = wasClosed && 
+        !['DONE', 'FIXED', ''].includes(prevResolutionUpper);
+      
+      if (!prevHadBadResolution && !isFirstAppearance) {
+        result.canceledThisIteration = true;
+        result.qualifyingReasons.push(`Status: ${prevStatus || '(blank)'} → ${currStatus} (Resolution: ${currResolution})`);
+      } else if (prevHadBadResolution) {
+        result.alreadyCanceled = true;
+      }
+    }
+  }
+  
+  // ═══════════════════════════════════════════════════════════════════════════
+  // STEP 5: Check OVERDUE (due this iteration but not complete)
+  // ═══════════════════════════════════════════════════════════════════════════
+  if (currEndIter && !result.isDone && !result.isPendingClosure && !result.isDeferred && !result.isCanceled) {
+    const iterMatch = currEndIter.match(/Iteration\s*(\d+)/i);
+    if (iterMatch && parseInt(iterMatch[1], 10) === iterationNumber) {
+      result.isIterationRisk = true;
+      result.isOverdue = true;
+      
+      if (!result.isNew) {
+        result.qualifyingReasons.push(`Due Iteration ${iterationNumber} but Status = "${currStatus || 'In Progress'}"`);
+      }
+    }
+  }
+  
+  // ═══════════════════════════════════════════════════════════════════════════
+  // STEP 6: Check AT-RISK status (only if no other status badge)
+  // ═══════════════════════════════════════════════════════════════════════════
+  const isRagAtRisk = currRAGUpper === 'AMBER' || currRAGUpper === 'RED';
+  if (isRagAtRisk && !hasQualifyingChanges && !result.isNew && !result.isDone && 
+      !result.isPendingClosure && !result.isDeferred && !result.isCanceled && !result.isOverdue) {
+    result.isAtRisk = true;
+  }
+  
+  // ═══════════════════════════════════════════════════════════════════════════
+  // STEP 7: Check MODIFIED and build qualifying reasons from actual changes
+  // ═══════════════════════════════════════════════════════════════════════════
+  if (hasQualifyingChanges && !result.isNew && !result.isDone && !result.isPendingClosure && 
+      !result.isDeferred && !result.isCanceled) {
+    const changeReasons = [];
+    
+    // Check RAG change
+    const isBlankToGreen = prevRAG === '' && currRAGUpper.includes('GREEN');
+    if (currRAG !== prevRAG && !isBlankToGreen && prevRAG !== '') {
+      changeReasons.push(`RAG: "${prevRAG}" → "${currRAG}"`);
+    }
+    
+    // Check RAG Note change
+    const isStatusOnlyNote = currRagNote.toLowerCase() === 'green' || 
+                             currRagNote.toLowerCase().startsWith('green -') ||
+                             currRagNote.toLowerCase() === 'on track';
+    const isBlankToStatusOnly = prevRagNote === '' && isStatusOnlyNote;
+    if (currRagNote !== prevRagNote && !isBlankToStatusOnly && prevRagNote !== '') {
+      changeReasons.push(`RAG Note modified`);
+    }
+    
+    // Check End Iteration change
+    if (currEndIter !== prevEndIter && prevEndIter !== '') {
+      changeReasons.push(`End Iteration: "${prevEndIter}" → "${currEndIter}"`);
+    }
+    
+    // Check Fix Versions change
+    if (currFixVersions !== prevFixVersions && prevFixVersions !== '') {
+      changeReasons.push(`Fix Versions: "${prevFixVersions}" → "${currFixVersions || '(removed)'}"`);
+    }
+    
+    // Check PI Commitment change (not to committed - that's NEW)
+    if (currPICommitment !== prevPICommitment && prevPICommitment !== '' && !result.isNew) {
+      changeReasons.push(`PI Commitment: "${prevPICommitment}" → "${currPICommitment}"`);
+    }
+    
+    if (changeReasons.length > 0) {
+      result.isModified = true;
+      result.qualifyingReasons.push(...changeReasons);
+    }
+    else if (jiraChanges && jiraChanges.length > 0) {
+      const jiraReasons = extractReasonsFromJiraChanges_(jiraChanges);
+      if (jiraReasons.length > 0) {
+        result.isModified = true;
+        result.qualifyingReasons.push(...jiraReasons);
+      }
+    }
+  }
+
+  
+  // ═══════════════════════════════════════════════════════════════════════════
+  // STEP 8: Assign PRIMARY BADGE
+  // Priority: CANCELED > DEF > DONE > PENDING > NEW > OVERDUE > CHG > ATRISK
+  // ═══════════════════════════════════════════════════════════════════════════
+  if (result.isCanceled) {
+    result.badge = 'CANCELED';
+    result.badgeReason = result.canceledReason || (result.canceledThisIteration ? 'Canceled this iteration' : 'Previously canceled');
+  } else if (result.isDeferred) {
+    result.badge = 'DEF';
+    result.badgeReason = result.deferredThisIteration ? 'Deferred this iteration' : 'Previously deferred';
+  } else if (result.isDone) {
+    result.badge = 'DONE';
+    result.badgeReason = result.closedThisIteration ? 'Completed this iteration' : 'Previously completed';
+  } else if (result.isPendingClosure) {
+    result.badge = 'PENDING';
+    result.badgeReason = result.pendingClosureThisIteration ? 'Pending Closure this iteration' : 'Previously pending closure';
+  } else if (result.isNew) {
+    result.badge = 'NEW';
+    result.badgeReason = newlyCommitted ? 'Newly committed' : 'New this iteration';
+  } else if (result.isOverdue) {
+    result.badge = 'OVERDUE';
+    result.badgeReason = `Due Iteration ${iterationNumber} but not complete`;
+  } else if (result.isModified) {
+    result.badge = 'CHG';
+    result.badgeReason = 'Has qualifying changes';
+  } else if (result.isAtRisk) {
+    result.badge = 'ATRISK';
+    result.badgeReason = `RAG is ${currRAG}`;
+  }
+  
+  return result;
+}
+function extractReasonsFromJiraChanges_(changes) {
+  const reasons = [];
+  const fieldDisplayNames = {
+    'status': 'Status',
+    'resolution': 'Resolution',
+    'PI Commitment': 'PI Commitment',
+    'customfield_10063': 'PI Commitment',
+    'Scrum Team': 'Scrum Team',
+    'customfield_10040': 'Scrum Team',
+    'PI Target Iteration': 'End Iteration',
+    'customfield_10061': 'End Iteration',
+    'Sprint': 'Sprint',
+    'Business Value': 'Business Value',
+    'customfield_10071': 'Business Value',
+    'Actual Value': 'Actual Value',
+    'customfield_10060': 'Actual Value',
+    'RAG': 'RAG',
+    'customfield_10068': 'RAG',
+    'RAG Note': 'RAG Note',
+    'customfield_10067': 'RAG Note',
+    'Iteration Start': 'Iteration Start',
+    'customfield_10069': 'Iteration Start',
+    'Iteration End': 'End Iteration',
+    'customfield_10070': 'End Iteration',
+    'Fix Version/s': 'Fix Versions',
+    'fixVersions': 'Fix Versions',
+    'Depends on Valuestream': 'Depends on Valuestream',
+    'customfield_10114': 'Depends on Valuestream',
+    'Depends on Team': 'Depends on Team',
+    'customfield_10120': 'Depends on Team'
+  };
+  
+  // Fields we care about for governance reporting
+  const governanceFields = ['status', 'resolution', 'RAG', 'RAG Note', 'PI Commitment', 
+    'PI Target Iteration', 'Iteration End', 'Fix Version/s', 'fixVersions',
+    'customfield_10063', 'customfield_10068', 'customfield_10067', 'customfield_10061', 'customfield_10070'];
+  
+  const seenFields = new Set();
+  
+  changes.forEach(change => {
+    const fieldId = change.fieldId || change.field;
+    const fieldName = change.field;
+    
+    // Check if this is a governance-relevant field
+    const isRelevant = governanceFields.includes(fieldId) || governanceFields.includes(fieldName);
+    if (!isRelevant) return;
+    
+    // Get display name
+    const displayName = fieldDisplayNames[fieldId] || fieldDisplayNames[fieldName] || fieldName;
+    
+    // Avoid duplicates
+    if (seenFields.has(displayName)) return;
+    seenFields.add(displayName);
+    
+    const from = change.from || change.fromString || '(blank)';
+    const to = change.to || change.toString || '(blank)';
+    
+    reasons.push(`${displayName}: "${from}" → "${to}"`);
+  });
+  
+  return reasons;
+}
+/**
+ * Writes computed badge flags to the changelog sheet
+ */
+function writeBadgeFlagsToChangelog(sheet, changelogData, iterationNumber, changesByKey, currIterData, prevIterData) {
+  const startTime = Date.now();
+  console.log(`\n  ═══════════════════════════════════════════════════════════════`);
+  console.log(`  COMPUTING BADGE FLAGS FOR ITERATION ${iterationNumber}`);
+  console.log(`  ═══════════════════════════════════════════════════════════════`);
+  
+  if (iterationNumber <= 1) return;
+  
+  const lastRow = sheet.getLastRow();
+  const lastCol = sheet.getLastColumn();
+  
+  const headers = sheet.getRange(5, 1, 1, lastCol).getValues()[0];
+  const headerIndexMap = {};
+  headers.forEach((header, index) => {
+    headerIndexMap[header] = index;
+  });
+  
+  // Badge column headers
+  const iterPrefix = `Iteration ${iterationNumber}`;
+  const badgeColumns = {
+    badge: `${iterPrefix} - Badge`,
+    statusBadge: `${iterPrefix} - Status Badge`,
+    statusNote: `${iterPrefix} - Status Note`,
+    atRisk: `${iterPrefix} - At Risk`,
+    iterRisk: `${iterPrefix} - Iteration Risk`,
+    closedThisIter: `${iterPrefix} - Closed This Iter`,
+    deferredThisIter: `${iterPrefix} - Deferred This Iter`,
+    canceledThisIter: `${iterPrefix} - Canceled This Iter`,
+    isNew: `${iterPrefix} - Is New`,
+    reasons: `${iterPrefix} - Qualifying Reasons`
+  };
+  
+  // Map to indices
+  const badgeCols = {};
+  let missingColumns = [];
+  
+  Object.entries(badgeColumns).forEach(([key, header]) => {
+    const idx = headerIndexMap[header];
+    if (idx !== undefined) {
+      badgeCols[key] = idx;
+    } else {
+      missingColumns.push(header);
+    }
+  });
+  
+  if (missingColumns.length > 0) {
+    console.log(`  ⚠️ Missing badge columns: ${missingColumns.join(', ')}`);
+    console.log(`  Run "Add Badge Columns to Changelog" to fix`);
+  }
+  
+  const keyColIndex = headerIndexMap['Key'];
+  const issueTypeColIndex = headerIndexMap['Issue Type'];
+  const noChangesColIndex = headerIndexMap[`${iterPrefix} - NO CHANGES`];
+  
+  if (keyColIndex === undefined) return;
+  
+  const dataStartRow = 6;
+  const numRows = lastRow - dataStartRow + 1;
+  if (numRows < 1) return;
+  
+  const allData = sheet.getRange(dataStartRow, 1, numRows, lastCol).getValues();
+  
+  // Stats including OVERDUE
+  const stats = { NEW: 0, CHG: 0, DONE: 0, DEF: 0, CANCELED: 0, OVERDUE: 0, ATRISK: 0, iterRisk: 0 };
+  
+  allData.forEach((row, rowIndex) => {
+    const key = row[keyColIndex];
+    if (!key) return;
+    
+    const issueType = issueTypeColIndex !== undefined ? row[issueTypeColIndex] : 'Epic';
+    const currItem = currIterData[key] || {};
+    const prevItem = prevIterData[key] || {};
+    
+    // Get JIRA changelog changes for this item
+    const jiraChanges = changesByKey[key] || [];
+    
+    const hasChangesFromJira = jiraChanges.length > 0;
+    const noChangesValue = noChangesColIndex !== undefined ? row[noChangesColIndex] : '';
+    const hasChangesFromColumn = noChangesValue !== 'NO CHANGES' && noChangesValue !== 'Baseline';
+    const hasQualifyingChanges = hasChangesFromJira || hasChangesFromColumn;
+    
+    // Pass JIRA changes to computeBadgeFlags for better qualifying reasons
+    const flags = computeBadgeFlags(currItem, prevItem, iterationNumber, hasQualifyingChanges, issueType, jiraChanges);
+    
+    // Write flags
+    if (badgeCols.badge !== undefined) allData[rowIndex][badgeCols.badge] = flags.badge;
+    if (badgeCols.statusBadge !== undefined) allData[rowIndex][badgeCols.statusBadge] = flags.statusBadge;
+    if (badgeCols.statusNote !== undefined) allData[rowIndex][badgeCols.statusNote] = flags.statusNote;
+    if (badgeCols.atRisk !== undefined) allData[rowIndex][badgeCols.atRisk] = flags.isAtRisk ? 'Yes' : '';
+    if (badgeCols.iterRisk !== undefined) allData[rowIndex][badgeCols.iterRisk] = flags.isIterationRisk ? 'Yes' : '';
+    if (badgeCols.closedThisIter !== undefined) allData[rowIndex][badgeCols.closedThisIter] = flags.closedThisIteration ? 'Yes' : '';
+    if (badgeCols.deferredThisIter !== undefined) allData[rowIndex][badgeCols.deferredThisIter] = flags.deferredThisIteration ? 'Yes' : '';
+    if (badgeCols.canceledThisIter !== undefined) allData[rowIndex][badgeCols.canceledThisIter] = flags.canceledThisIteration ? 'Yes' : '';
+    if (badgeCols.isNew !== undefined) allData[rowIndex][badgeCols.isNew] = flags.isNew ? 'Yes' : '';
+    if (badgeCols.reasons !== undefined) allData[rowIndex][badgeCols.reasons] = flags.qualifyingReasons.join('; ');
+    
+    // Track stats
+    if (flags.badge) stats[flags.badge]++;
+    if (flags.isIterationRisk) stats.iterRisk++;
+  });
+  
+  console.log(`  Badges: NEW=${stats.NEW}, OVERDUE=${stats.OVERDUE}, CHG=${stats.CHG}, DONE=${stats.DONE}, DEF=${stats.DEF}, CANCELED=${stats.CANCELED}, ATRISK=${stats.ATRISK}`);
+  
+  // Write badge data back to sheet
+  sheet.getRange(dataStartRow, 1, numRows, lastCol).setValues(allData);
+  
+  console.log(`  ⏱️ Badge computation complete in ${((Date.now() - startTime)/1000).toFixed(1)}s`);
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// HELPER FUNCTIONS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Loads iteration sheet data as a key-value map
+ */
+function loadIterationSheetAsMap_(sheet) {
+  const result = {};
+  
+  const lastRow = sheet.getLastRow();
+  const lastCol = sheet.getLastColumn();
+  
+  if (lastRow < 5) return result;
+  
+  const headers = sheet.getRange(4, 1, 1, lastCol).getValues()[0];
+  const data = sheet.getRange(5, 1, lastRow - 4, lastCol).getValues();
+  
+  const keyCol = headers.indexOf('Key');
+  if (keyCol === -1) return result;
+  
+  data.forEach(row => {
+    const key = row[keyCol];
+    if (key) {
+      const item = {};
+      headers.forEach((header, idx) => {
+        item[header] = row[idx];
+      });
+      result[key] = item;
+    }
+  });
+  
+  return result;
+}
+
+/**
+ * Normalizes a value for comparison
+ */
+function normalizeValue_(value) {
+  if (value === null || value === undefined) return '';
+  const strValue = String(value).trim();
+  if (strValue === '' || strValue.toLowerCase() === 'null' || strValue.toLowerCase() === 'undefined') {
+    return '';
+  }
+  return strValue;
+}
+
+/**
+ * Normalizes badge values
+ */
+function normalizeBadgeValue_(value) {
+  if (value === null || value === undefined) return '';
+  const str = String(value).trim();
+  if (str.toLowerCase() === 'n/a' || str.toLowerCase() === 'none' || str === '-') {
+    return '';
+  }
+  return str;
+}
+
+/**
+ * Maps JIRA changelog field to tracked field name
+ */
+function getFieldNameFromChange(change, trackedFields) {
+  const fieldMapping = {
+    'status': 'Status',
+    'resolution': 'Resolution',
+    'PI Commitment': 'PI Commitment',
+    'customfield_10063': 'PI Commitment',
+    'Scrum Team': 'Scrum Team',
+    'customfield_10040': 'Scrum Team',
+    'PI Target Iteration': 'PI Target Iteration',
+    'customfield_10061': 'PI Target Iteration',
+    'Sprint': 'Sprint Name',
+    'Sprint Name': 'Sprint Name',
+    'Business Value': 'Business Value',
+    'customfield_10071': 'Business Value',
+    'Actual Value': 'Actual Value',
+    'customfield_10060': 'Actual Value',
+    'RAG': 'RAG',
+    'customfield_10068': 'RAG',
+    'RAG Note': 'RAG Note',
+    'customfield_10067': 'RAG Note',
+    'Iteration Start': 'Iteration Start',
+    'customfield_10069': 'Iteration Start',
+    'Iteration End': 'Iteration End',
+    'customfield_10070': 'Iteration End',
+    'summary': 'Summary Changed',
+    'description': 'Description Changed',
+    'Fix Version/s': 'Fix Versions',
+    'fixVersions': 'Fix Versions',
+    'labels': 'Governance',
+    'Depends on Valuestream': 'Depends on Valuestream',
+    'customfield_10114': 'Depends on Valuestream',
+    'Depends on Team': 'Depends on Team',
+    'customfield_10120': 'Depends on Team'
+  };
+  
+  const mappedField = fieldMapping[change.field] || fieldMapping[change.fieldId];
+  
+  if (mappedField && trackedFields.includes(mappedField)) {
+    return mappedField;
+  }
+  
+  if (trackedFields.includes(change.field)) {
+    return change.field;
+  }
+  
+  return null;
+}
+
+/**
+ * Gets tracked fields from Diff Field sheet
+ */
+function getTrackedFields() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const diffSheet = ss.getSheetByName('Diff Field');
+  
+  if (!diffSheet) {
+    console.log('  WARNING: Diff Field sheet not found, using defaults');
+    return ['Status', 'Resolution', 'PI Commitment', 'Scrum Team'];
+  }
+  
+  const diffData = diffSheet.getDataRange().getValues();
+  const fields = [];
+  
+  for (let i = 1; i < diffData.length; i++) {
+    const fieldName = diffData[i][0];
+    const trackIt = diffData[i][2];
+    
+    if (trackIt && fieldName) {
+      const cleanName = fieldName
+        .replace(/\s*\([^)]*\)\s*$/, '')
+        .replace(/\s*\?+\s*$/, '')
+        .trim();
+      
+      if (!cleanName.includes('AI ')) {
+        fields.push(cleanName);
+      }
+    }
+  }
+  
+  return fields;
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// GOVERNANCE FILTERING
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Determines if an epic should be included in governance based on allocation
+ */
+function shouldIncludeInGovernance(allocation, portfolioInitiative) {
+  const allocationLower = (allocation || '').toLowerCase().trim();
+  const portfolioUpper = (portfolioInitiative || '').toUpperCase().trim();
+  
+  // Rule 2: Exclude if Portfolio Initiative IS "KLO" or "QUALITY"
+  if (portfolioUpper === 'KLO' || portfolioUpper === 'QUALITY') {
+    return 'No';
+  }
+  
+  // Rule 1: Exclude KLO/Quality allocation UNLESS portfolio is INFOSEC
+  const isKloOrQualityAllocation = allocationLower === 'klo' || 
+                                    allocationLower === 'quality' || 
+                                    allocationLower === 'klo/quality';
+  
+  if (isKloOrQualityAllocation && !portfolioUpper.startsWith('INFOSEC')) {
+    return 'No';
+  }
+  
+  // Include everything else
+  return 'Yes';
+}
+
+/**
+ * Reapplies governance filter to existing changelog
+ */
+function reapplyGovernanceFilter(piNumber) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ui = SpreadsheetApp.getUi();
+  
+  console.log(`========== REAPPLYING GOVERNANCE FILTER ==========`);
+  
+  try {
+    const changelogSheetName = `PI ${piNumber} Changelog`;
+    const changelogSheet = ss.getSheetByName(changelogSheetName);
+    
+    if (!changelogSheet) {
+      throw new Error(`Changelog sheet "${changelogSheetName}" not found.`);
+    }
+    
+    // Find most recent iteration sheet
+    let iterationSheet = null;
+    for (let iter = 6; iter >= 1; iter--) {
+      iterationSheet = ss.getSheetByName(`PI ${piNumber} - Iteration ${iter}`);
+      if (iterationSheet) break;
+    }
+    
+    if (!iterationSheet) {
+      throw new Error(`No iteration sheet found for PI ${piNumber}`);
+    }
+    
+    // Read iteration data
+    const iterHeaders = iterationSheet.getRange(4, 1, 1, iterationSheet.getLastColumn()).getValues()[0];
+    const keyCol = iterHeaders.indexOf('Key');
+    const allocationCol = iterHeaders.indexOf('Allocation');
+    const portfolioCol = iterHeaders.indexOf('Portfolio Initiative');
+    const issueTypeCol = iterHeaders.indexOf('Issue Type');
+    
+    const iterData = iterationSheet.getRange(5, 1, iterationSheet.getLastRow() - 4, iterationSheet.getLastColumn()).getValues();
+    
+    // Build lookup map
+    const epicDataMap = {};
+    iterData.forEach(row => {
+      const key = row[keyCol];
+      if (key) {
+        epicDataMap[key] = {
+          allocation: allocationCol >= 0 ? (row[allocationCol] || '') : '',
+          portfolioInitiative: portfolioCol >= 0 ? (row[portfolioCol] || '') : '',
+          issueType: issueTypeCol >= 0 ? (row[issueTypeCol] || '') : ''
+        };
+      }
+    });
+    
+    // Read changelog keys
+    const changelogLastRow = changelogSheet.getLastRow();
+    if (changelogLastRow < 6) return;
+    
+    const changelogData = changelogSheet.getRange(6, 1, changelogLastRow - 5, 3).getValues();
+    
+    // Calculate governance for epics first
+    const epicGovernanceMap = {};
+    changelogData.forEach(row => {
+      const key = row[0];
+      const issueType = row[2];
+      
+      if (key && issueType === 'Epic') {
+        const epicData = epicDataMap[key] || { allocation: '', portfolioInitiative: '' };
+        epicGovernanceMap[key] = shouldIncludeInGovernance(epicData.allocation, epicData.portfolioInitiative);
+      }
+    });
+    
+    // Calculate governance for all rows
+    const governanceValues = [];
+    changelogData.forEach(row => {
+      const key = row[0];
+      const parentKey = row[1];
+      const issueType = row[2];
+      
+      if (!key) {
+        governanceValues.push(['']);
+        return;
+      }
+      
+      if (issueType === 'Epic') {
+        governanceValues.push([epicGovernanceMap[key] || 'Yes']);
+      } else if (issueType === 'Dependency') {
+        governanceValues.push([epicGovernanceMap[parentKey] || 'Yes']);
+      } else {
+        governanceValues.push(['Yes']);
+      }
+    });
+    
+    changelogSheet.getRange(6, 6, governanceValues.length, 1).setValues(governanceValues);
+    
+    const yesCount = governanceValues.filter(v => v[0] === 'Yes').length;
+    const noCount = governanceValues.filter(v => v[0] === 'No').length;
+    
+    ss.toast(`Governance filter: ${yesCount} included, ${noCount} excluded`, '✅ Complete', 5);
+    
+    ui.alert('✅ Governance Filter Applied', 
+      `Results:\n• Included: ${yesCount}\n• Excluded: ${noCount}`,
+      ui.ButtonSet.OK);
+    
+  } catch (e) {
+    console.error('Error in reapplyGovernanceFilter:', e);
+    ui.alert('Error', e.toString(), ui.ButtonSet.OK);
+  }
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// STYLING FUNCTIONS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Applies alternating row colors for readability
+ */
+function applyAlternatingRowColors(sheet, startRow, numRows) {
+  const lastCol = sheet.getLastColumn();
+  
+  for (let i = 0; i < numRows; i++) {
+    const row = startRow + i;
+    const color = (i % 2 === 0) ? '#ffffff' : '#f8f9fa';
+    sheet.getRange(row, 1, 1, lastCol).setBackground(color);
+  }
+}
+
+/**
+ * Applies color coding to iteration columns
+ */
+function applyIterationColumnColors(sheet, iterationNumber) {
+  const headers = sheet.getRange(5, 1, 1, sheet.getLastColumn()).getValues()[0];
+  const lastRow = sheet.getLastRow();
+  
+  if (lastRow < 6) return;
+  
+  const iterColors = {
+    1: '#f3e5f5',
+    2: '#e8f5e9',
+    3: '#e3f2fd',
+    4: '#fff3e0',
+    5: '#fce4ec',
+    6: '#f3f3f3'
+  };
+  
+  const color = iterColors[iterationNumber] || '#ffffff';
+  
+  const iterColumns = [];
+  headers.forEach((header, index) => {
+    if (header.includes(`Iteration ${iterationNumber} -`)) {
+      iterColumns.push(index + 1);
+    }
+  });
+  
+  iterColumns.forEach(col => {
+    sheet.getRange(6, col, lastRow - 5, 1).setBackground(color);
+  });
+}
+
+/**
+ * Updates the last run timestamp
+ */
+function updateLastRunTimestamp(sheet) {
+  const timestamp = new Date().toLocaleString();
+  sheet.getRange('A3').setValue(`Last Run: ${timestamp}`)
+    .setFontWeight('bold')
+    .setFontStyle('italic')
+    .setFontSize(10)
+    .setFontColor('#d32f2f');
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MENU FUNCTIONS FOR BADGE COLUMN MANAGEMENT
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Adds badge columns to an existing changelog sheet
+ * Safe to run multiple times - only adds missing columns
+ */
+function addBadgeColumnsToChangelog() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ui = SpreadsheetApp.getUi();
+  
+  const response = ui.prompt('Add Badge Columns',
+    'Enter the PI number (e.g., 13):',
+    ui.ButtonSet.OK_CANCEL);
+  
+  if (response.getSelectedButton() !== ui.Button.OK) return;
+  
+  const piNumber = parseInt(response.getResponseText().trim());
+  if (isNaN(piNumber)) {
+    ui.alert('Invalid PI number');
+    return;
+  }
+  
+  const changelogSheetName = `PI ${piNumber} Changelog`;
+  const sheet = ss.getSheetByName(changelogSheetName);
+  
+  if (!sheet) {
+    ui.alert('Error', `Changelog sheet "${changelogSheetName}" not found.`, ui.ButtonSet.OK);
+    return;
+  }
+  
+  console.log(`Adding badge columns to ${changelogSheetName}...`);
+  
+  const lastCol = sheet.getLastColumn();
+  const headers = sheet.getRange(5, 1, 1, lastCol).getValues()[0];
+  const trackedFields = getTrackedFields();
+  let columnsAdded = 0;
+  
+  for (let iter = 2; iter <= 6; iter++) {
+    const iterPrefix = `Iteration ${iter}`;
+    const noChangesCol = `${iterPrefix} - NO CHANGES`;
+    
+    if (!headers.includes(noChangesCol)) continue;
+    
+    const badgeCol = `${iterPrefix} - Badge`;
+    if (headers.includes(badgeCol)) continue;
+    
+    // Need to add badge columns
+    const noChangesIndex = headers.indexOf(noChangesCol);
+    const insertAt = noChangesIndex + 2;
+    
+    const badgeHeaders = [
+      `${iterPrefix} - Badge`,
+      `${iterPrefix} - Status Badge`,
+      `${iterPrefix} - Status Note`,
+      `${iterPrefix} - At Risk`,
+      `${iterPrefix} - Iteration Risk`,
+      `${iterPrefix} - Closed This Iter`,
+      `${iterPrefix} - Deferred This Iter`,
+      `${iterPrefix} - Canceled This Iter`,  
+      `${iterPrefix} - Is New`,
+      `${iterPrefix} - Qualifying Reasons`
+    ];
+    sheet.insertColumnsAfter(noChangesIndex + 1, badgeHeaders.length);
+    
+    sheet.getRange(5, insertAt, 1, badgeHeaders.length).setValues([badgeHeaders])
+      .setFontWeight('bold')
+      .setBackground('#9b7bb8')
+      .setFontColor('white');
+    
+    columnsAdded += badgeHeaders.length;
+    console.log(`  Added ${badgeHeaders.length} badge columns for Iteration ${iter}`);
+    
+    badgeHeaders.forEach((h, i) => headers.splice(noChangesIndex + 1 + i, 0, h));
+  }
+  
+  if (columnsAdded > 0) {
+    ss.toast(`Added ${columnsAdded} badge columns`, '✅ Complete', 5);
+    ui.alert('Badge Columns Added',
+      `Added ${columnsAdded} badge columns to ${changelogSheetName}.\n\n` +
+      `Run "Analyze Changes for Iteration X" to compute badge values.`,
+      ui.ButtonSet.OK);
+  } else {
+    ui.alert('No Changes Needed', 'All badge columns already exist.', ui.ButtonSet.OK);
+  }
+}

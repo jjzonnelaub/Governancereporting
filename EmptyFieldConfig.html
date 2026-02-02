@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <base target="_top">
+    <style>
+        body {
+            font-family: 'Google Sans', Arial, sans-serif;
+            padding: 20px;
+            margin: 0;
+            background-color: #f8f9fa;
+        }
+        
+        .container {
+            max-width: 500px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 8px;
+            padding: 24px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.24);
+        }
+        
+        h2 {
+            color: #202124;
+            font-size: 24px;
+            font-weight: 400;
+            margin: 0 0 8px 0;
+        }
+        
+        .subtitle {
+            color: #5f6368;
+            font-size: 14px;
+            margin-bottom: 24px;
+        }
+        
+        .section {
+            margin-bottom: 24px;
+            padding-bottom: 24px;
+            border-bottom: 1px solid #e8eaed;
+        }
+        
+        .section:last-of-type {
+            border-bottom: none;
+            margin-bottom: 0;
+            padding-bottom: 0;
+        }
+        
+        .field-group {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 0;
+        }
+        
+        .field-info {
+            flex: 1;
+        }
+        
+        .field-label {
+            font-size: 16px;
+            color: #202124;
+            font-weight: 500;
+            margin-bottom: 4px;
+        }
+        
+        .field-description {
+            font-size: 13px;
+            color: #5f6368;
+            line-height: 1.4;
+        }
+        
+        .current-behavior {
+            background-color: #fef7e0;
+            border-left: 3px solid #f9ab00;
+            padding: 8px 12px;
+            margin-top: 8px;
+            font-size: 12px;
+            color: #3c4043;
+        }
+        
+        .current-behavior strong {
+            color: #ea8600;
+        }
+        
+        /* Toggle Switch Styles */
+        .toggle-switch {
+            position: relative;
+            display: inline-block;
+            width: 48px;
+            height: 24px;
+            margin-left: 12px;
+        }
+        
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+        
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #ccc;
+            transition: .3s;
+            border-radius: 24px;
+        }
+        
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 18px;
+            width: 18px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: .3s;
+            border-radius: 50%;
+        }
+        
+        input:checked + .slider {
+            background-color: #1a73e8;
+        }
+        
+        input:checked + .slider:before {
+            transform: translateX(24px);
+        }
+        
+        .toggle-status {
+            font-size: 12px;
+            color: #5f6368;
+            margin-left: 8px;
+            min-width: 60px;
+            text-align: center;
+        }
+        
+        .toggle-status.enabled {
+            color: #1a73e8;
+            font-weight: 500;
+        }
+        
+        .button-group {
+            display: flex;
+            gap: 12px;
+            margin-top: 24px;
+            padding-top: 24px;
+            border-top: 1px solid #e8eaed;
+        }
+        
+        button {
+            flex: 1;
+            padding: 10px 24px;
+            border: none;
+            border-radius: 4px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .btn-save {
+            background-color: #1a73e8;
+            color: white;
+        }
+        
+        .btn-save:hover {
+            background-color: #1765cc;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.3);
+        }
+        
+        .btn-cancel {
+            background-color: white;
+            color: #5f6368;
+            border: 1px solid #dadce0;
+        }
+        
+        .btn-cancel:hover {
+            background-color: #f8f9fa;
+            border-color: #bdc1c6;
+        }
+        
+        .info-box {
+            background-color: #e8f0fe;
+            border-radius: 4px;
+            padding: 12px;
+            margin-top: 16px;
+            font-size: 13px;
+            color: #185abc;
+        }
+        
+        .info-box-icon {
+            display: inline-block;
+            margin-right: 8px;
+            font-weight: bold;
+        }
+        
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 20px;
+        }
+        
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #1a73e8;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>Empty Field Display Configuration</h2>
+        <div class="subtitle">Configure how empty fields are displayed in generated slides</div>
+        
+        <div class="section">
+            <div class="field-group">
+                <div class="field-info">
+                    <div class="field-label">Exclude Empty Summary</div>
+                    <div class="field-description">
+                        When enabled, slides will not show the "title missing" label if Summary is empty
+                    </div>
+                    <div class="current-behavior">
+                        <strong>Current:</strong> Displays "title missing" when Summary field is empty
+                    </div>
+                </div>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="excludeSummary">
+                    <span class="slider"></span>
+                </label>
+                <span class="toggle-status" id="summaryStatus">Disabled</span>
+            </div>
+        </div>
+        
+        <div class="section">
+            <div class="field-group">
+                <div class="field-info">
+                    <div class="field-label">Exclude Empty Fix Version</div>
+                    <div class="field-description">
+                        When enabled, slides will not show the "Fix Version not available" label if Fix Version is empty
+                    </div>
+                    <div class="current-behavior">
+                        <strong>Current:</strong> Displays "Fix Version not available" when Fix Version field is empty
+                    </div>
+                </div>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="excludeFixVersion">
+                    <span class="slider"></span>
+                </label>
+                <span class="toggle-status" id="fixVersionStatus">Disabled</span>
+            </div>
+        </div>
+        
+        <div class="section">
+            <div class="field-group">
+                <div class="field-info">
+                    <div class="field-label">Exclude Empty Iteration</div>
+                    <div class="field-description">
+                        When enabled, slides will not show the "Iteration unknown" label if Iteration is empty
+                    </div>
+                    <div class="current-behavior">
+                        <strong>Current:</strong> Displays "Iteration unknown" when Iteration field is empty
+                    </div>
+                </div>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="excludeIteration">
+                    <span class="slider"></span>
+                </label>
+                <span class="toggle-status" id="iterationStatus">Disabled</span>
+            </div>
+        </div>
+        
+        <div class="info-box">
+            <span class="info-box-icon">ℹ️</span>
+            When toggles are enabled, empty fields will be completely hidden from slides. When disabled, default labels will be displayed for empty fields.
+        </div>
+        
+        <div class="button-group">
+            <button class="btn-cancel" onclick="closeDialog()">Cancel</button>
+            <button class="btn-save" onclick="saveConfiguration()">Save Configuration</button>
+        </div>
+        
+        <div class="loading" id="loading">
+            <div class="spinner"></div>
+            <p>Saving configuration...</p>
+        </div>
+    </div>
+
+    <script>
+        // Load current configuration when dialog opens
+        window.onload = function() {
+            google.script.run
+                .withSuccessHandler(loadConfiguration)
+                .withFailureHandler(showError)
+                .getEmptyFieldConfiguration();
+        };
+        
+        function loadConfiguration(config) {
+            if (config) {
+                document.getElementById('excludeSummary').checked = config.excludeSummary || false;
+                document.getElementById('excludeFixVersion').checked = config.excludeFixVersion || false;
+                document.getElementById('excludeIteration').checked = config.excludeIteration || false;
+                
+                updateToggleStatus('excludeSummary', 'summaryStatus');
+                updateToggleStatus('excludeFixVersion', 'fixVersionStatus');
+                updateToggleStatus('excludeIteration', 'iterationStatus');
+            }
+        }
+        
+        // Update status text when toggle changes
+        document.getElementById('excludeSummary').addEventListener('change', function() {
+            updateToggleStatus('excludeSummary', 'summaryStatus');
+        });
+        
+        document.getElementById('excludeFixVersion').addEventListener('change', function() {
+            updateToggleStatus('excludeFixVersion', 'fixVersionStatus');
+        });
+        
+        document.getElementById('excludeIteration').addEventListener('change', function() {
+            updateToggleStatus('excludeIteration', 'iterationStatus');
+        });
+        
+        function updateToggleStatus(checkboxId, statusId) {
+            const checkbox = document.getElementById(checkboxId);
+            const status = document.getElementById(statusId);
+            
+            if (checkbox.checked) {
+                status.textContent = 'Enabled';
+                status.classList.add('enabled');
+            } else {
+                status.textContent = 'Disabled';
+                status.classList.remove('enabled');
+            }
+        }
+        
+        function saveConfiguration() {
+            const config = {
+                excludeSummary: document.getElementById('excludeSummary').checked,
+                excludeFixVersion: document.getElementById('excludeFixVersion').checked,
+                excludeIteration: document.getElementById('excludeIteration').checked
+            };
+            
+            // Show loading
+            document.querySelector('.container').style.display = 'none';
+            document.getElementById('loading').style.display = 'block';
+            
+            google.script.run
+                .withSuccessHandler(onSaveSuccess)
+                .withFailureHandler(onSaveError)
+                .saveEmptyFieldConfiguration(config);
+        }
+        
+        function onSaveSuccess() {
+            google.script.host.close();
+        }
+        
+        function onSaveError(error) {
+            alert('Error saving configuration: ' + error);
+            document.querySelector('.container').style.display = 'block';
+            document.getElementById('loading').style.display = 'none';
+        }
+        
+        function showError(error) {
+            alert('Error loading configuration: ' + error);
+        }
+        
+        function closeDialog() {
+            google.script.host.close();
+        }
+    </script>
+</body>
+</html>

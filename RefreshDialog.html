@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <style>
+      body { font-family: Arial, sans-serif; padding: 20px; }
+      .container { max-width: 350px; margin: auto; }
+      select { width: 100%; padding: 8px; margin-top: 10px; }
+      .button-container { text-align: right; margin-top: 20px; }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h2 id="dialogTitle">Refresh Value Stream</h2>
+      <p>Select a value stream to refresh with the latest data from JIRA.</p>
+      
+      <select id="valueStreamSelect">
+        <option value="">Loading...</option>
+      </select>
+
+      <div class="button-container">
+        <button onclick="google.script.host.close()">Cancel</button>
+        <button id="refreshBtn" onclick="runRefresh()">Refresh</button>
+      </div>
+    </div>
+    
+    <script>
+      let piNumber;
+
+      // Load data on start
+      google.script.run.withSuccessHandler(populateDialog).withFailureHandler(showError).getRefreshDialogData();
+
+      function populateDialog(data) {
+        piNumber = data.piNumber;
+        document.getElementById('dialogTitle').innerText = 'Refresh for PI ' + piNumber;
+        
+        const select = document.getElementById('valueStreamSelect');
+        select.innerHTML = '<option value="">-- Select a Value Stream --</option>'; // Clear loading text
+        data.valueStreams.forEach(vs => {
+          const option = document.createElement('option');
+          option.value = vs;
+          option.textContent = vs;
+          select.appendChild(option);
+        });
+      }
+
+      function runRefresh() {
+        const select = document.getElementById('valueStreamSelect');
+        const selectedValueStream = select.value;
+
+        if (!selectedValueStream) {
+          alert('Please select a value stream.');
+          return;
+        }
+
+        document.getElementById('refreshBtn').disabled = true;
+        document.getElementById('refreshBtn').innerText = 'Refreshing...';
+
+        google.script.run
+          .withSuccessHandler(() => google.script.host.close())
+          .withFailureHandler(showError)
+          .runValueStreamRefresh(piNumber, selectedValueStream);
+      }
+
+      function showError(error) {
+        alert('An error occurred: ' + error.message);
+        google.script.host.close();
+      }
+    </script>
+  </body>
+</html>
