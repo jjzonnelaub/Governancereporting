@@ -1,0 +1,1186 @@
+/**
+ * Program Governance Report - Sheet Writing
+ * This script provides functionality for:
+ * - Writing governance data to Google Sheets
+ * - Creating augmentable reports (add/replace value streams incrementally)
+ * - Enriching reports with parent initiative data
+ * - JIRA configuration management & UI dialogs
+ */
+// ===== ENRICHMENT COLUMN CONFIGURATION =====
+// Column AO = column 41 (1-indexed). All columns from AO onwards are considered "enrichment" columns
+// These include: Initiative Title, Initiative Description, Business Perspective, Technical Perspective, etc.
+const ENRICHMENT_START_COLUMN = 41; // Column AO (1-indexed)
+// ===== SHEET WRITING =====
+
+function writeGovernanceDataToSheet(processedData, programIncrement, valueStream, sheetName, clearExisting = false, isFirstValueStream = false) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(sheetName);
+  
+  // UPDATED headers - now includes Infosec Subsection
+  const headers = [
+    'Key', 'Parent Key', 'Issue Type', 'Summary', 'Status', 'Resolution', 'Epic Name', 'PI Objective',
+    'Benefit Hypothesis', 'Acceptance Criteria', 'Value Stream/Org', 'Program Increment', 'PI Commitment', 'Scrum Team', 
+    'PI Target Iteration', 'Allocation', 'PI Objective Status', 'Portfolio Initiative', 'Program Initiative', 
+    'Infosec Subsection', 'Investment (Story Points)', 'Story Point Completion', 'Total Child Issues', 'Closed Child Issues', 
+    '% Complete', 'Business Value', 'Actual Value', 'RAG', 'RAG Note', 'Depends on Valuestream', 
+    'Depends on Team', 'Fix Versions', 'Start Iteration Name', 'End Iteration Name', 'Feature Points',
+    'Governance', 'Momentum', 'Created Date', 'Updated Date', 'Last Refresh'
+  ];
+  
+  let isFirstWrite = false;
+  
+  if (!sheet) {
+    sheet = ss.insertSheet(sheetName);
+    isFirstWrite = true;
+  } else {
+    // Check if sheet is empty (only clear if starting fresh)
+    const lastRow = sheet.getLastRow();
+    if (lastRow === 0 || lastRow < 4) {
+      isFirstWrite = true;
+    }
+  }
+  
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ✅ ENRICHMENT CACHE: Cache columns AO+ BEFORE any clearing
+  // This preserves Initiative Title, Perspectives, etc. keyed by Epic Key
+  // ═══════════════════════════════════════════════════════════════════════════
+  let enrichmentCache = new Map(); // Map<epicKey, Array<values>>
+  let enrichmentHeaders = [];      // Headers for enrichment columns
+  
+  if (!isFirstWrite && sheet.getLastRow() > 4) {
+    const lastRow = sheet.getLastRow();
+    const lastCol = sheet.getLastColumn();
+    
+    // Only cache if there are columns beyond the core JIRA data (column AO = 41)
+    if (lastCol >= ENRICHMENT_START_COLUMN) {
+      console.log(`\n📦 ENRICHMENT CACHE: Caching columns ${columnToLetter(ENRICHMENT_START_COLUMN)} to ${columnToLetter(lastCol)}...`);
+      
+      // Get enrichment column headers (row 4)
+      const enrichmentColCount = lastCol - ENRICHMENT_START_COLUMN + 1;
+      enrichmentHeaders = sheet.getRange(4, ENRICHMENT_START_COLUMN, 1, enrichmentColCount).getValues()[0];
+      console.log(`   Enrichment columns: ${enrichmentHeaders.join(', ')}`);
+      
+      // Get Key column (column A) and enrichment data for all rows
+      const dataRowCount = lastRow - 4;
+      if (dataRowCount > 0) {
+        // Read Key column (column 1) - need to extract from HYPERLINK if present
+        const keyValues = sheet.getRange(5, 1, dataRowCount, 1).getDisplayValues();
+        
+        // Read enrichment columns
+        const enrichmentData = sheet.getRange(5, ENRICHMENT_START_COLUMN, dataRowCount, enrichmentColCount).getValues();
+        
+        // Build cache: epicKey -> enrichment values
+        for (let i = 0; i < dataRowCount; i++) {
+          let epicKey = keyValues[i][0];
+          
+          // Skip empty keys or non-Epic rows
+          if (!epicKey || epicKey.trim() === '') continue;
+          
+          // Check if any enrichment data exists for this row
+          const enrichmentRow = enrichmentData[i];
+          const hasEnrichmentData = enrichmentRow.some(val => val !== null && val !== undefined && val !== '');
+          
+          if (hasEnrichmentData) {
+            enrichmentCache.set(epicKey, enrichmentRow);
+          }
+        }
+        
+        console.log(`   ✓ Cached enrichment data for ${enrichmentCache.size} epics`);
+        
+        // Log a few examples
+        let exampleCount = 0;
+        for (const [key, values] of enrichmentCache) {
+          if (exampleCount >= 3) break;
+          const nonEmptyValues = values.filter(v => v !== null && v !== undefined && v !== '').length;
+          console.log(`     ${key}: ${nonEmptyValues} non-empty enrichment fields`);
+          exampleCount++;
+        }
+        if (enrichmentCache.size > 3) {
+          console.log(`     ... and ${enrichmentCache.size - 3} more`);
+        }
+      }
+    } else {
+      console.log(`📦 ENRICHMENT CACHE: No enrichment columns found (last column: ${lastCol})`);
+    }
+  }
+  // ═══════════════════════════════════════════════════════════════════════════
+  // END ENRICHMENT CACHE
+  // ═══════════════════════════════════════════════════════════════════════════
+  
+  // ===== FULL CLEAR: When starting a fresh report (first value stream), clear ALL old data =====
+  if (clearExisting && isFirstValueStream && !isFirstWrite) {
+    const lastRow = sheet.getLastRow();
+    if (lastRow > 4) {
+      // Clear content from data rows instead of deleting
+      // (deleteRows fails with "cannot delete all non-frozen rows" error)
+      const dataRowCount = lastRow - 4;
+      sheet.getRange(5, 1, dataRowCount, sheet.getLastColumn()).clearContent();
+      
+      // Now safely delete rows if there are many (keep at least 1 row to avoid error)
+      if (dataRowCount > 1) {
+        try {
+          sheet.deleteRows(6, dataRowCount - 1); // Keep row 5, delete rest
+          console.log(`🧹 FULL CLEAR: Cleared and deleted ${dataRowCount - 1} old data rows for fresh report generation`);
+        } catch (e) {
+          // If delete still fails, content is already cleared which is sufficient
+          console.log(`🧹 FULL CLEAR: Cleared ${dataRowCount} old data rows (delete skipped: ${e.message})`);
+        }
+      } else {
+        console.log(`🧹 FULL CLEAR: Cleared ${dataRowCount} old data row for fresh report generation`);
+      }
+    }
+  }
+  // ===== END FULL CLEAR =====
+  
+  // Only clear and write headers if this is the first write
+  if (isFirstWrite) {
+    sheet.clear();
+    
+    // Set font for entire sheet
+    sheet.getRange(1, 1, sheet.getMaxRows(), sheet.getMaxColumns()).setFontFamily('Comfortaa');
+    
+    // Header rows
+    sheet.getRange(1, 1).setValue(`${sheetName} Report`)
+      .setFontSize(16)
+      .setFontWeight('bold');
+    
+    sheet.getRange(2, 1).setValue('Generated from JIRA')
+      .setFontStyle('italic')
+      .setFontSize(10);
+    
+    // Column headers in row 4
+    sheet.getRange(4, 1, 1, headers.length).setValues([headers]);
+    
+    // Style headers - PURPLE background with white text
+    const headerRange = sheet.getRange(4, 1, 1, headers.length);
+    headerRange.setBackground('#9b7bb8');
+    headerRange.setFontColor('white');
+    headerRange.setFontWeight('bold');
+    
+    // Freeze header rows
+    sheet.setFrozenRows(4);
+    sheet.setFrozenColumns(3);
+  }
+  
+  // ===== SMART CLEAR: Remove only rows for THIS value stream (for subsequent value streams) =====
+  if (clearExisting && !isFirstWrite && !isFirstValueStream && valueStream) {
+    const lastRow = sheet.getLastRow();
+    if (lastRow > 4) {
+      const vsColIndex = headers.indexOf('Value Stream/Org'); // 0-based for array access
+      const dataRange = sheet.getRange(5, 1, lastRow - 4, headers.length);
+      const allData = dataRange.getValues();
+      
+      // Filter OUT rows matching this value stream (keep everything else)
+      const rowsToKeep = allData.filter(row => {
+        const rowVS = row[vsColIndex];
+        return rowVS !== valueStream;
+      });
+      
+      const rowsRemoved = allData.length - rowsToKeep.length;
+      const originalRowCount = allData.length;
+      
+      // Clear all data rows
+      dataRange.clearContent();
+      
+      // Rewrite the rows we're keeping (other value streams)
+      if (rowsToKeep.length > 0) {
+        sheet.getRange(5, 1, rowsToKeep.length, headers.length).setValues(rowsToKeep);
+      }
+      
+      // ===== FIX: Delete excess empty rows to prevent blank row gaps =====
+      const excessRows = originalRowCount - rowsToKeep.length;
+      if (excessRows > 0 && rowsToKeep.length > 0) {
+        // Delete the now-empty rows starting after the kept data
+        const deleteStartRow = 5 + rowsToKeep.length;
+        const rowsToDelete = lastRow - deleteStartRow + 1;
+        if (rowsToDelete > 0) {
+          try {
+            sheet.deleteRows(deleteStartRow, rowsToDelete);
+            console.log(`🗑️ Deleted ${rowsToDelete} excess empty rows`);
+          } catch (e) {
+            // Content already cleared, deletion not critical
+            console.log(`🗑️ Could not delete empty rows: ${e.message}`);
+          }
+        }
+      } else if (rowsToKeep.length === 0 && originalRowCount > 0) {
+        // If no rows to keep, clear content but keep at least one row
+        // (Google Sheets doesn't allow deleting ALL non-frozen rows)
+        if (originalRowCount > 1) {
+          try {
+            sheet.deleteRows(6, originalRowCount - 1); // Keep row 5, delete rest
+            console.log(`🗑️ Deleted ${originalRowCount - 1} old data rows (keeping 1 empty row)`);
+          } catch (e) {
+            console.log(`🗑️ Could not delete rows: ${e.message}`);
+          }
+        }
+        console.log(`🗑️ Cleared all ${originalRowCount} old data rows (no rows to keep)`);
+      }
+      // ===== END FIX =====
+      
+      console.log(`🔄 Smart clear: Removed ${rowsRemoved} rows for "${valueStream}", kept ${rowsToKeep.length} rows from other value streams`);
+    }
+  }
+  // ===== END SMART CLEAR =====
+  
+  // ===== Row 3 for Refresh Timestamp - NOW RUNS EVERY TIME =====
+  // Extract PI and Iteration from sheetName (e.g., "PI 13 - Iteration 2")
+  const iterMatch = sheetName.match(/PI (\d+) - Iteration (\d+)/);
+  if (iterMatch) {
+    const piNum = iterMatch[1];
+    const iterNum = iterMatch[2];
+    const reportKey = `PI${piNum}_Iteration${iterNum}`;
+    const refreshTimestamp = getRefreshTimestamp(reportKey);
+    
+    if (refreshTimestamp) {
+      sheet.getRange(3, 1).setValue(`Last Full Refresh (Fresh Data): ${refreshTimestamp.toLocaleString()}`)
+        .setFontStyle('italic')
+        .setFontSize(9)
+        .setFontColor('#666666');
+      console.log(`✓ Updated timestamp in row 3: ${refreshTimestamp.toLocaleString()}`);
+    } else {
+      console.warn(`⚠️ No refresh timestamp found for ${reportKey}`);
+    }
+  }
+  // ===== END TIMESTAMP CODE =====
+  
+  const jiraConfig = getJiraConfig();
+  const currentTimestamp = new Date().toLocaleString();
+  
+  // ===== DEDUPLICATION LOGIC =====
+  // Read existing keys from the sheet to prevent duplicates
+  // (Only needed if we didn't just clear this value stream's data)
+  let existingKeys = new Set();
+  
+  if (!isFirstWrite && !clearExisting) {
+    const lastRow = sheet.getLastRow();
+    if (lastRow > 4) { // If there's data beyond the header
+      const keyColIndex = headers.indexOf('Key');
+      if (keyColIndex !== -1) {
+        const existingKeyRange = sheet.getRange(5, keyColIndex + 1, lastRow - 4, 1);
+        const existingKeyValues = existingKeyRange.getValues();
+        
+        existingKeyValues.forEach(row => {
+          const key = row[0];
+          // Extract key from HYPERLINK formula if present
+          if (typeof key === 'string' && key.startsWith('=HYPERLINK')) {
+            const keyMatch = key.match(/"([A-Z]+-\d+)"/);
+            if (keyMatch) {
+              existingKeys.add(keyMatch[1]);
+            }
+          } else if (key) {
+            existingKeys.add(key.toString());
+          }
+        });
+        
+        console.log(`Found ${existingKeys.size} existing keys in sheet`);
+      }
+    }
+  }
+  
+  // Filter out duplicates from processedData (skip if clearExisting since we already removed old data)
+  let filteredData = processedData;
+  if (existingKeys.size > 0 && !clearExisting) {
+    filteredData = processedData.filter(row => {
+      const key = row['Key'];
+      return !existingKeys.has(key);
+    });
+    
+    const duplicateCount = processedData.length - filteredData.length;
+    if (duplicateCount > 0) {
+      console.log(`⚠️ Removed ${duplicateCount} duplicate keys (already in sheet)`);
+      console.log(`Writing ${filteredData.length} new unique keys`);
+    }
+  }
+  // ===== END DEDUPLICATION LOGIC =====
+  
+  // Write data (append only NEW, unique data)
+  if (filteredData.length > 0) {
+    // Map processedData to match column structure (NOW WITH Infosec Subsection)
+    const dataRows = filteredData.map(row => [
+      row['Key'],
+      row['Parent Key'] || '',
+      row['Issue Type'],
+      row['Summary'],
+      row['Status'],
+      row['Resolution'] || '',
+      row['Issue Type'] === 'Epic' ? (row['Initiative Title'] || '') : '', // Epic Name
+      row['PI Objective'] || '',
+      row['Benefit Hypothesis'] || '',
+      row['Acceptance Criteria'] || '',
+      row['Value Stream/Org'] || '',
+      row['Program Increment'] || '', 
+      row['PI Commitment'] || '',
+      row['Scrum Team'] || '',
+      row['PI Target Iteration'] || '',
+      row['Allocation'] || '',
+      row['PI Objective Status'] || '',
+      row['Portfolio Initiative'] || '',
+      row['Program Initiative'] || '',
+      row['Infosec Subsection'] || '',  // NEW: InfoSec subsection from labels
+      row['Total Story Points'] || 0,   // Investment (Story Points)
+      row['Closed Story Points'] || 0,  // Story Point Completion
+      row['Total Items'] || 0,          // Total Child Issues
+      row['Closed Items'] || 0,         // Closed Child Issues
+      row['% Complete (Points)'] || 0,  // % Complete
+      row['Business Value'] || '',
+      row['Actual Value'] || '',
+      row['RAG'] || '',
+      row['RAG Note'] || '',
+      row['Depends on Valuestream'] || '',  
+      row['Depends on Team'] || '',  
+      row['Fix Versions'] || '',
+      row['Start Iteration Name'] || '',
+      row['End Iteration Name'] || '',
+      row['Feature Points'] || '',
+      row['Has Governance Label'] === 'Yes' ? 'Yes' : 'No',
+      row['Has Momentum Label'] === 'Yes' ? 'Yes' : 'No',
+      row['Created Date'] || '',
+      row['Updated Date'] || '',
+      currentTimestamp  // Last Refresh
+    ]);
+    
+    // Find the next available row (append mode)
+    const lastRow = sheet.getLastRow();
+    const startRow = lastRow + 1;
+    
+    sheet.getRange(startRow, 1, dataRows.length, headers.length).setValues(dataRows);
+    
+    // Apply hyperlinks for Key, Parent Key, and Summary columns
+    applyHyperlinks(sheet, dataRows, headers, startRow, jiraConfig);
+    
+    // Format percentage column
+    const percentColIndex = headers.indexOf('% Complete') + 1;
+    if (percentColIndex > 0) {
+      sheet.getRange(startRow, percentColIndex, dataRows.length, 1).setNumberFormat('0"%"');
+    }
+    
+    console.log(`✅ Appended ${filteredData.length} rows starting at row ${startRow} for value stream: ${valueStream}`);
+  } else {
+    console.log(`ℹ️ No new rows to append (all ${processedData.length} keys already exist in sheet)`);
+  }
+  
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ✅ RESTORE ENRICHMENT DATA: Restore cached columns AO+ after writing new data
+  // Match by Epic Key and write enrichment data back to the correct rows
+  // ═══════════════════════════════════════════════════════════════════════════
+  if (enrichmentCache.size > 0 && enrichmentHeaders.length > 0) {
+    console.log(`\n📦 ENRICHMENT RESTORE: Restoring cached data for ${enrichmentCache.size} epics...`);
+    
+    const lastRow = sheet.getLastRow();
+    const dataRowCount = lastRow - 4;
+    
+    if (dataRowCount > 0) {
+      // Ensure enrichment columns exist (write headers if needed)
+      const currentLastCol = sheet.getLastColumn();
+      if (currentLastCol < ENRICHMENT_START_COLUMN + enrichmentHeaders.length - 1) {
+        // Write enrichment headers
+        sheet.getRange(4, ENRICHMENT_START_COLUMN, 1, enrichmentHeaders.length).setValues([enrichmentHeaders]);
+        
+        // Style enrichment headers to match core headers
+        const enrichmentHeaderRange = sheet.getRange(4, ENRICHMENT_START_COLUMN, 1, enrichmentHeaders.length);
+        enrichmentHeaderRange.setBackground('#9b7bb8');
+        enrichmentHeaderRange.setFontColor('white');
+        enrichmentHeaderRange.setFontWeight('bold');
+        
+        console.log(`   ✓ Created enrichment column headers: ${enrichmentHeaders.join(', ')}`);
+      }
+      
+      // Read all keys from the refreshed data (display values to handle HYPERLINK formulas)
+      const keyValues = sheet.getRange(5, 1, dataRowCount, 1).getDisplayValues();
+      
+      // Build array of enrichment data for batch write
+      const enrichmentDataToWrite = [];
+      let restoredCount = 0;
+      let notFoundCount = 0;
+      const notFoundKeys = [];
+      
+      for (let i = 0; i < dataRowCount; i++) {
+        const epicKey = keyValues[i][0];
+        
+        if (enrichmentCache.has(epicKey)) {
+          enrichmentDataToWrite.push(enrichmentCache.get(epicKey));
+          restoredCount++;
+        } else {
+          // No cached data for this key - write empty row
+          enrichmentDataToWrite.push(new Array(enrichmentHeaders.length).fill(''));
+          if (epicKey && epicKey.trim() !== '') {
+            notFoundCount++;
+            if (notFoundKeys.length < 5) {
+              notFoundKeys.push(epicKey);
+            }
+          }
+        }
+      }
+      
+      // Batch write all enrichment data
+      if (enrichmentDataToWrite.length > 0) {
+        sheet.getRange(5, ENRICHMENT_START_COLUMN, enrichmentDataToWrite.length, enrichmentHeaders.length)
+          .setValues(enrichmentDataToWrite);
+        
+        console.log(`   ✓ Restored enrichment data for ${restoredCount} epics`);
+        if (notFoundCount > 0) {
+          console.log(`   ℹ️ ${notFoundCount} new epics without cached enrichment data`);
+          if (notFoundKeys.length > 0) {
+            console.log(`      Examples: ${notFoundKeys.join(', ')}${notFoundCount > 5 ? ' ...' : ''}`);
+          }
+        }
+      }
+    }
+  }
+  // ═══════════════════════════════════════════════════════════════════════════
+  // END RESTORE ENRICHMENT DATA
+  // ═══════════════════════════════════════════════════════════════════════════
+  
+  // Apply formatting after all data is written
+  applyEnhancedFormatting(sheet, headers);
+  highlightGovernanceMomentum(sheet, headers, 5, sheet.getLastRow() - 4);
+  
+  console.log(`📊 Total rows in sheet now: ${sheet.getLastRow() - 4} data rows`);
+}
+
+/**
+ * Helper function to convert column number to letter (e.g., 41 -> "AO")
+ */
+function columnToLetter(column) {
+  let letter = '';
+  let temp;
+  while (column > 0) {
+    temp = (column - 1) % 26;
+    letter = String.fromCharCode(temp + 65) + letter;
+    column = Math.floor((column - temp - 1) / 26);
+  }
+  return letter;
+}
+// ===== HYPERLINK & FORMATTING =====
+
+function applyHyperlinks(sheet, dataRows, headers, startRow, jiraConfig) {
+  const keyColIndex = headers.indexOf('Key');
+  const parentKeyColIndex = headers.indexOf('Parent Key');
+  const summaryColIndex = headers.indexOf('Summary');
+
+  if (keyColIndex === -1 || summaryColIndex === -1 || parentKeyColIndex === -1) {
+    console.error('Could not find Key, Parent Key, or Summary columns for hyperlinks.');
+    return;
+  }
+
+  // Prepare hyperlink formulas
+  const keyFormulas = dataRows.map(row => {
+    const key = row[keyColIndex];
+    return key ? [`=HYPERLINK("${jiraConfig.baseUrl}/browse/${key}","${key}")`] : [''];
+  });
+
+  const parentKeyFormulas = dataRows.map(row => {
+    const parentKey = row[parentKeyColIndex];
+    return parentKey ? [`=HYPERLINK("${jiraConfig.baseUrl}/browse/${parentKey}","${parentKey}")`] : [''];
+  });
+
+  const summaryFormulas = dataRows.map(row => {
+    const key = row[keyColIndex];
+    const summary = (row[summaryColIndex] || '').toString().replace(/"/g, '""');
+    return key ? [`=HYPERLINK("${jiraConfig.baseUrl}/browse/${key}","${summary}")`] : [summary];
+  });
+
+  // Batch apply all formulas at once for performance
+  const allSheetRows = sheet.getRange(startRow, 1, dataRows.length, headers.length);
+  
+  if (keyFormulas.length > 0) {
+    sheet.getRange(startRow, keyColIndex + 1, allSheetRows.length, 1).setFormulas(keyFormulas);
+    sheet.getRange(startRow, parentKeyColIndex + 1, allSheetRows.length, 1).setFormulas(parentKeyFormulas);
+    sheet.getRange(startRow, summaryColIndex + 1, allSheetRows.length, 1).setFormulas(summaryFormulas);
+  }
+}
+
+function applyEnhancedFormatting(sheet, headers) {
+  const wrapColumns = [
+    'Summary', 'Epic Name', 'PI Objective', 'Benefit Hypothesis', 'Acceptance Criteria', 
+    'Portfolio Initiative', 'Program Initiative', 'Fix Versions', 'Initiative Title', 'Initiative Summary',
+    'Infosec Subsection'  // NEW: Add wrapping for Infosec Subsection
+  ];
+  
+  wrapColumns.forEach(colName => {
+    const colIndex = headers.indexOf(colName) + 1;
+    if (colIndex > 0) {
+      sheet.getRange(5, colIndex, sheet.getMaxRows() - 4, 1).setWrapStrategy(SpreadsheetApp.WrapStrategy.WRAP);
+    }
+  });
+
+  const columnWidths = {
+    'Key': 100, 'Parent Key': 100, 'Issue Type': 100, 'Summary': 300, 'Status': 100,
+    'Resolution': 100, 'Epic Name': 250, 'PI Objective': 300,
+    'Benefit Hypothesis': 300, 'Acceptance Criteria': 300,
+    'Value Stream/Org': 150, 'PI Commitment': 120, 'Scrum Team': 150, 'PI Target Iteration': 80, 
+    'Allocation': 80, 'PI Objective Status': 80,'Portfolio Initiative': 150, 'Program Initiative': 150,
+    'Infosec Subsection': 180,  // NEW: Width for Infosec Subsection column
+    'Investment (Story Points)': 80,
+    'Story Point Completion': 80, 'Total Child Issues': 80, 'Closed Child Issues': 80, '% Complete': 80,
+    'Business Value': 100, 'Actual Value': 100, 'RAG': 80, 'RAG Note': 200,
+    'Depends on Valuestream': 150,'Depends on Team': 150, 'Fix Versions': 150, 
+    'Start Iteration Name': 120, 'End Iteration Name': 120, 'Governance': 100, 'Momentum': 100, 
+    'Created Date': 120, 'Updated Date': 120, 'Last Refresh': 120
+  };
+
+  Object.entries(columnWidths).forEach(([colName, width]) => {
+    const colIndex = headers.indexOf(colName) + 1;
+    if (colIndex > 0) {
+      sheet.setColumnWidth(colIndex, width);
+    }
+  });
+
+  const percentCol = headers.indexOf('% Complete') + 1;
+  if (percentCol > 0 && sheet.getLastRow() >= 5) {
+      sheet.getRange(5, percentCol, sheet.getLastRow() - 4, 1).setNumberFormat('0"%"');
+  }
+}
+
+
+function highlightGovernanceMomentum(sheet, headers, startRow, numRows) {
+  const governanceCol = headers.indexOf('Governance') + 1;
+  const momentumCol = headers.indexOf('Momentum') + 1;
+
+  if (governanceCol > 0 && momentumCol > 0 && numRows > 0) {
+    const govValues = sheet.getRange(startRow, governanceCol, numRows, 1).getValues();
+    const momValues = sheet.getRange(startRow, momentumCol, numRows, 1).getValues();
+    
+    const govBackgrounds = govValues.map(val => [val[0] === 'Yes' ? '#c8e6c9' : null]);
+    const momBackgrounds = momValues.map(val => [val[0] === 'Yes' ? '#bbdefb' : null]);
+
+    sheet.getRange(startRow, governanceCol, numRows, 1).setBackgrounds(govBackgrounds);
+    sheet.getRange(startRow, momentumCol, numRows, 1).setBackgrounds(momBackgrounds);
+  }
+}
+
+// ===== NEW INITIATIVE ENRICHMENT FUNCTION =====
+
+function enrichWithInitiativeData() {
+  return logActivity('JIRA Initiative Data Enrichment', () => {
+    const ui = SpreadsheetApp.getUi();
+    const sheet = SpreadsheetApp.getActiveSheet();
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    
+    console.log('\n╔══════════════════════════════════════════════════════════════╗');
+    console.log('║           INITIATIVE ENRICHMENT                              ║');
+    console.log('╠══════════════════════════════════════════════════════════════╣');
+    console.log(`║  Sheet: ${sheet.getName()}  |  ${new Date().toLocaleString()}`);
+    console.log('╚══════════════════════════════════════════════════════════════╝\n');
+    
+    const sheetName = sheet.getName();
+    
+    if (!sheetName.includes('Governance') && !sheetName.match(/PI \d+ - Iteration \d+/)) {
+      ui.alert('Error', 'Please run this function on a valid report sheet.', ui.ButtonSet.OK);
+      return;
+    }
+    
+    ss.toast('Starting Initiative enrichment...', '🔗 Fetching Data', 10);
+
+    try {
+      // Get headers from row 4
+      const allHeaders = sheet.getRange(4, 1, 1, sheet.getLastColumn()).getValues()[0];
+      console.log(`Total columns: ${allHeaders.length}`);
+      
+      // Find key columns (1-based indices)
+      const parentKeyCol = allHeaders.indexOf('Parent Key') + 1;
+      const issueKeyCol = allHeaders.indexOf('Key') + 1;
+      const issueTypeCol = allHeaders.indexOf('Issue Type') + 1;
+      
+      console.log(`Column indices - Parent Key: ${parentKeyCol}, Key: ${issueKeyCol}, Issue Type: ${issueTypeCol}`);
+      
+      if (parentKeyCol === 0 || issueKeyCol === 0 || issueTypeCol === 0) {
+        ui.alert('Error', 'Could not find required columns (Key, Parent Key, Issue Type).', ui.ButtonSet.OK);
+        return;
+      }
+      
+      // Find or note initiative columns
+      let titleCol = allHeaders.indexOf('Initiative Title') + 1;
+      let descCol = allHeaders.indexOf('Initiative Description') + 1;
+      
+      // Get data range
+      const lastRow = sheet.getLastRow();
+      if (lastRow <= 4) {
+        ui.alert('No Data', 'No data rows found in the sheet.', ui.ButtonSet.OK);
+        return;
+      }
+      
+      const dataRange = sheet.getRange(5, 1, lastRow - 4, sheet.getLastColumn()).getValues();
+      console.log(`Processing ${dataRange.length} rows`);
+      
+      // Collect unique initiative keys from Epic parent keys
+      const initiativeKeys = new Set();
+      
+      dataRange.forEach((row) => {
+        const issueType = row[issueTypeCol - 1];
+        const parentKey = row[parentKeyCol - 1];
+        
+        // Extract key from HYPERLINK formula if present
+        let cleanParentKey = parentKey;
+        if (typeof parentKey === 'string' && parentKey.startsWith('=HYPERLINK')) {
+          const keyMatch = parentKey.match(/"([A-Z]+-\d+)"/);
+          if (keyMatch) {
+            cleanParentKey = keyMatch[1];
+          }
+        }
+        
+        if (issueType === 'Epic' && cleanParentKey) {
+          initiativeKeys.add(cleanParentKey);
+        }
+      });
+
+      console.log(`Found ${initiativeKeys.size} unique initiatives`);
+
+      if (initiativeKeys.size === 0) {
+        ui.alert('No Initiatives Found', 'No parent keys were found for Epics.', ui.ButtonSet.OK);
+        return;
+      }
+      
+      ss.toast(`Fetching ${initiativeKeys.size} initiatives...`, '🔗 Processing', 30);
+
+      // Fetch initiatives in batches to avoid URL length limit
+      const initiativeArray = Array.from(initiativeKeys);
+      const BATCH_SIZE = 40; // Keep batches small to avoid URL length issues
+      const initiatives = [];
+      const totalBatches = Math.ceil(initiativeArray.length / BATCH_SIZE);
+      
+      console.log(`Fetching ${initiativeArray.length} initiatives in ${totalBatches} batches of ${BATCH_SIZE}`);
+      
+      for (let i = 0; i < initiativeArray.length; i += BATCH_SIZE) {
+        const batchNum = Math.floor(i / BATCH_SIZE) + 1;
+        const batch = initiativeArray.slice(i, i + BATCH_SIZE);
+        
+        console.log(`  Batch ${batchNum}/${totalBatches}: ${batch.length} keys`);
+        
+        // Build JQL for this batch only
+        const jql = `key IN (${batch.map(k => `"${k}"`).join(',')})`;
+        
+        try {
+          const batchResults = searchJiraIssuesLimited(jql, 100);
+          
+          batchResults.forEach(issue => {
+            if (issue && issue.key) {
+              initiatives.push(issue);
+            }
+          });
+          
+          console.log(`    ✓ Got ${batchResults.length} initiatives`);
+          
+        } catch (batchError) {
+          console.error(`    ✗ Batch ${batchNum} error: ${batchError.message}`);
+        }
+        
+        // Small delay between batches
+        if (i + BATCH_SIZE < initiativeArray.length) {
+          Utilities.sleep(200);
+        }
+      }
+      
+      console.log(`Total initiatives fetched: ${initiatives.length}/${initiativeKeys.size}`);
+      
+      if (initiatives.length === 0) {
+        console.error('CRITICAL: No initiative data fetched from JIRA');
+        ui.alert('Error', 'Failed to fetch any initiative data from JIRA. Check console logs.', ui.ButtonSet.OK);
+        return;
+      }
+      
+      // Build initiative map with robust null checking
+      const initiativeMap = new Map();
+      initiatives.forEach(initiative => {
+        if (!initiative || !initiative.key) {
+          console.warn('⚠️ Skipping invalid initiative entry (null or missing key)');
+          return;
+        }
+        
+        initiativeMap.set(initiative.key, {
+          title: initiative.summary || initiative.epicName || '',
+          description: initiative.description || ''
+        });
+      });
+      
+      console.log(`Built initiative map with ${initiativeMap.size} entries`);
+
+      // Create columns if they don't exist
+      if (titleCol === 0) {
+        titleCol = sheet.getLastColumn() + 1;
+        sheet.getRange(4, titleCol).setValue('Initiative Title')
+          .setFontWeight('bold')
+          .setBackground('#7e57c2')
+          .setFontColor('white');
+        sheet.setColumnWidth(titleCol, 350);
+        console.log(`Created Initiative Title column at position ${titleCol}`);
+      }
+      if (descCol === 0) {
+        descCol = sheet.getLastColumn() + 1;
+        sheet.getRange(4, descCol).setValue('Initiative Description')
+          .setFontWeight('bold')
+          .setBackground('#7e57c2')
+          .setFontColor('white');
+        sheet.setColumnWidth(descCol, 350);
+        console.log(`Created Initiative Description column at position ${descCol}`);
+      }
+
+      ss.toast('Writing Initiative data...', '📝 Processing', 10);
+
+      // Prepare data arrays
+      const titleData = [];
+      const descData = [];
+
+      // Collect data
+      for (let i = 0; i < dataRange.length; i++) {
+        let parentKey = dataRange[i][parentKeyCol - 1];
+        
+        // Extract key from HYPERLINK formula if present
+        if (typeof parentKey === 'string' && parentKey.startsWith('=HYPERLINK')) {
+          const keyMatch = parentKey.match(/"([A-Z]+-\d+)"/);
+          if (keyMatch) {
+            parentKey = keyMatch[1];
+          }
+        }
+        
+        if (parentKey && initiativeMap.has(parentKey)) {
+          const initiative = initiativeMap.get(parentKey);
+          titleData.push([initiative.title]);
+          descData.push([initiative.description]);
+        } else {
+          titleData.push(['']);
+          descData.push(['']);
+        }
+      }
+
+      // Write data to sheet
+      if (titleData.length > 0) {
+        sheet.getRange(5, titleCol, titleData.length, 1).setValues(titleData);
+        sheet.getRange(5, descCol, descData.length, 1).setValues(descData);
+
+        // Set wrap text
+        sheet.getRange(5, titleCol, titleData.length, 1).setWrapStrategy(SpreadsheetApp.WrapStrategy.WRAP);
+        sheet.getRange(5, descCol, descData.length, 1).setWrapStrategy(SpreadsheetApp.WrapStrategy.WRAP);
+      }
+      
+      const enrichedCount = titleData.filter(row => row[0] !== '').length;
+      
+      ss.toast(`✅ Enrichment complete! Updated ${enrichedCount} rows.`, '✅ Success', 5);
+      console.log(`✅ Initiative enrichment complete: ${enrichedCount} rows enriched`);
+
+    } catch (error) {
+      console.error('Initiative Enrichment Error:', error);
+      ss.toast('', '', 1); // Dismiss working toast
+      ui.alert('Error', error.toString(), ui.ButtonSet.OK);
+    }
+  }, { sheetName: SpreadsheetApp.getActiveSheet().getName() });
+}
+// Generate perspective at INITIATIVE level (uses same rules as original epic-level generation)
+function generateInitiativePerspective(initiativeKey, initiativeTitle, initiativeDescription, childEpics, perspectiveType) {
+  
+  // Build context about child epics
+  const epicSummaries = childEpics.map((e, idx) => 
+    `Epic ${idx + 1} (${e.issueKey}): ${e.summary}`
+  ).join('\n');
+  
+  // Use SAME prompt structure as original Business/Technical perspective generation
+  let prompt = '';
+  
+  if (perspectiveType === 'Business') {
+    prompt = `You are writing a brief business perspective summary for an executive presentation about this initiative.
+
+Initiative: ${initiativeTitle}
+Initiative Key: ${initiativeKey}
+Description: ${initiativeDescription || 'No description provided'}
+
+Child Epics:
+${epicSummaries}
+
+Write a concise business perspective (1-2 sentences) that explains:
+- What business value or outcomes this initiative delivers
+- Why this matters to stakeholders
+
+Rules:
+- Be concise and executive-friendly
+- Focus on business impact, not technical details
+- 1-2 sentences maximum
+- No bullet points or lists`;
+    
+  } else {
+    // Technical perspective
+    prompt = `You are writing a brief technical perspective summary for an executive presentation about this initiative.
+
+Initiative: ${initiativeTitle}
+Initiative Key: ${initiativeKey}
+Description: ${initiativeDescription || 'No description provided'}
+
+Child Epics:
+${epicSummaries}
+
+Write a concise technical perspective (1-2 sentences) that explains:
+- What technologies, systems, or capabilities are being built
+- Key technical deliverables or implementation approach
+
+Rules:
+- Be concise but include enough technical context
+- Focus on WHAT is being delivered technically
+- 1-2 sentences maximum
+- No bullet points or lists
+- Executive-friendly language`;
+  }
+  
+  const MAX_RETRIES = 2;
+  let attempt = 0;
+  
+  while (attempt <= MAX_RETRIES) {
+    try {
+      console.log(`Generating ${perspectiveType} perspective for ${initiativeKey} (attempt ${attempt + 1})`);
+      const perspective = callGeminiAPI(prompt);
+      
+      if (perspective && typeof perspective === 'string') {
+        let cleaned = perspective.trim();
+        
+        // Basic cleanup
+        cleaned = cleaned.replace(/^["']|["']$/g, '');
+        cleaned = cleaned.replace(/^```.*\n?|\n?```$/g, '');
+        cleaned = cleaned.replace(/^\*\*|^\*|\*\*$|\*$/g, '');
+        
+        // Validation: reasonable length, no bullets
+        const hasBullets = /[•\-]\s/.test(cleaned) || /^\d+\.\s/.test(cleaned);
+        
+        if (cleaned.length > 10 && cleaned.length < 800 && !hasBullets) {
+          console.log(`✓ Generated ${perspectiveType} perspective for ${initiativeKey}`);
+          return cleaned;
+        }
+        
+        console.warn(`Invalid response (attempt ${attempt + 1}): length=${cleaned.length}, bullets=${hasBullets}`);
+      }
+    } catch (error) {
+      console.error(`Error generating perspective (attempt ${attempt + 1}): ${error.message}`);
+    }
+    
+    attempt++;
+    if (attempt <= MAX_RETRIES) {
+      Utilities.sleep(500);
+    }
+  }
+  
+  console.error(`Failed to generate ${perspectiveType} perspective for ${initiativeKey}`);
+  return '***** PLEASE ADD MANUALLY *****';
+}
+
+// Hyperlink helper function
+function applyHyperlinks(sheet, dataRows, headers, startRow, jiraConfig) {
+  const keyColIndex = headers.indexOf('Key');
+  const parentKeyColIndex = headers.indexOf('Parent Key');
+  const summaryColIndex = headers.indexOf('Summary');
+
+  if (keyColIndex === -1 || summaryColIndex === -1 || parentKeyColIndex === -1) {
+    console.error('Could not find Key, Parent Key, or Summary columns for hyperlinks.');
+    return;
+  }
+
+  // Prepare hyperlink formulas
+  const keyFormulas = dataRows.map(row => {
+    const key = row[keyColIndex];
+    return key ? [`=HYPERLINK("${jiraConfig.baseUrl}/browse/${key}","${key}")`] : [''];
+  });
+
+  const parentKeyFormulas = dataRows.map(row => {
+    const parentKey = row[parentKeyColIndex];
+    return parentKey ? [`=HYPERLINK("${jiraConfig.baseUrl}/browse/${parentKey}","${parentKey}")`] : [''];
+  });
+
+  const summaryFormulas = dataRows.map(row => {
+    const key = row[keyColIndex];
+    const summary = row[summaryColIndex];
+    if (key && summary) {
+      const cleanSummary = summary.toString().replace(/"/g, '""');
+      return [`=HYPERLINK("${jiraConfig.baseUrl}/browse/${key}","${cleanSummary}")`];
+    }
+    return [summary || ''];
+  });
+
+  if (dataRows.length > 0) {
+    sheet.getRange(startRow, keyColIndex + 1, dataRows.length, 1).setFormulas(keyFormulas);
+    sheet.getRange(startRow, parentKeyColIndex + 1, dataRows.length, 1).setFormulas(parentKeyFormulas);
+    sheet.getRange(startRow, summaryColIndex + 1, dataRows.length, 1).setFormulas(summaryFormulas);
+  }
+}
+
+// Enhanced formatting helper
+function applyEnhancedFormatting(sheet, headers) {
+  const wrapColumns = [
+    'Summary', 'Epic Name', 'PI Objective', 'Benefit Hypothesis', 'Acceptance Criteria', 
+    'Portfolio Initiative', 'Program Initiative', 'Fix Versions', 'RAG Note'
+  ];
+  
+  wrapColumns.forEach(colName => {
+    const colIndex = headers.indexOf(colName) + 1;
+    if (colIndex > 0) {
+      sheet.getRange(5, colIndex, sheet.getMaxRows() - 4, 1).setWrapStrategy(SpreadsheetApp.WrapStrategy.WRAP);
+    }
+  });
+
+  const columnWidths = {
+    'Key': 100, 'Parent Key': 100, 'Issue Type': 100, 'Summary': 300, 'Status': 100,
+    'Resolution': 100, 'Epic Name': 250, 'PI Objective': 300,
+    'Benefit Hypothesis': 300, 'Acceptance Criteria': 300,
+    'Value Stream/Org': 150, 'PI Commitment': 120, 'Scrum Team': 150, 'PI Target Iteration': 80, 
+    'Allocation': 80, 'PI Objective Status': 80, 'Portfolio Initiative': 150, 'Program Initiative': 150, 
+    'Investment (Story Points)': 80, 'Story Point Completion': 80, 'Total Child Issues': 80, 
+    'Closed Child Issues': 80, '% Complete': 80,
+    'Business Value': 100, 'Actual Value': 100, 'RAG': 80, 'RAG Note': 200,
+    'Depends on Valuestream': 150, 'Depends on Team': 150, 'Fix Versions': 150, 
+    'Start Iteration Name': 120, 'End Iteration Name': 120, 'Feature Points': 100,
+    'Governance': 100, 'Momentum': 100, 
+    'Created Date': 120, 'Updated Date': 120, 'Last Refresh': 120
+  };
+
+  Object.entries(columnWidths).forEach(([colName, width]) => {
+    const colIndex = headers.indexOf(colName) + 1;
+    if (colIndex > 0) {
+      sheet.setColumnWidth(colIndex, width);
+    }
+  });
+
+  const percentCol = headers.indexOf('% Complete') + 1;
+  if (percentCol > 0 && sheet.getLastRow() >= 5) {
+    sheet.getRange(5, percentCol, sheet.getLastRow() - 4, 1).setNumberFormat('0"%"');
+  }
+}
+
+// Highlight governance and momentum
+function highlightGovernanceMomentum(sheet, headers, startRow, numRows) {
+  const governanceCol = headers.indexOf('Governance') + 1;
+  const momentumCol = headers.indexOf('Momentum') + 1;
+
+  if (governanceCol > 0 && momentumCol > 0 && numRows > 0) {
+    const govValues = sheet.getRange(startRow, governanceCol, numRows, 1).getValues();
+    const momValues = sheet.getRange(startRow, momentumCol, numRows, 1).getValues();
+    
+    const govBackgrounds = govValues.map(val => [val[0] === 'Yes' ? '#c8e6c9' : null]);
+    const momBackgrounds = momValues.map(val => [val[0] === 'Yes' ? '#bbdefb' : null]);
+
+    sheet.getRange(startRow, governanceCol, numRows, 1).setBackgrounds(govBackgrounds);
+    sheet.getRange(startRow, momentumCol, numRows, 1).setBackgrounds(momBackgrounds);
+  }
+}
+
+// ===== HYPERLINK & FORMATTING =====
+
+function applyHyperlinks(sheet, allSheetRows, headers, startRow, jiraConfig) {
+  const keyColIndex = headers.indexOf('Key');
+  const parentKeyColIndex = headers.indexOf('Parent Key');
+  const summaryColIndex = headers.indexOf('Summary');
+
+  if (keyColIndex === -1 || summaryColIndex === -1 || parentKeyColIndex === -1) {
+    console.error('Could not find Key, Parent Key, or Summary columns for hyperlinks.');
+    return;
+  }
+
+  // Prepare hyperlink formulas for the entire dataset
+  const keyFormulas = allSheetRows.map(row => {
+    const key = row[keyColIndex];
+    return key ? [`=HYPERLINK("${jiraConfig.baseUrl}/browse/${key}","${key}")`] : [''];
+  });
+
+  const parentKeyFormulas = allSheetRows.map(row => {
+    const parentKey = row[parentKeyColIndex];
+    return parentKey ? [`=HYPERLINK("${jiraConfig.baseUrl}/browse/${parentKey}","${parentKey}")`] : [''];
+  });
+
+  const summaryFormulas = allSheetRows.map(row => {
+    const key = row[keyColIndex];
+    const summary = row[summaryColIndex];
+    if (key && summary) {
+      const cleanSummary = summary.toString().replace(/"/g, '""');
+      return [`=HYPERLINK("${jiraConfig.baseUrl}/browse/${key}","${cleanSummary}")`];
+    }
+    return [summary || ''];
+  });
+
+  if (allSheetRows.length > 0) {
+    // Apply formulas to all three columns in batch operations
+    sheet.getRange(startRow, keyColIndex + 1, allSheetRows.length, 1).setFormulas(keyFormulas);
+    sheet.getRange(startRow, parentKeyColIndex + 1, allSheetRows.length, 1).setFormulas(parentKeyFormulas);
+    sheet.getRange(startRow, summaryColIndex + 1, allSheetRows.length, 1).setFormulas(summaryFormulas);
+  }
+}
+
+function applyEnhancedFormatting(sheet, headers) {
+  const wrapColumns = [
+    'Summary', 'Epic Name', 'PI Objective', 'Benefit Hypothesis', 'Acceptance Criteria', 
+    'Portfolio Initiative', 'Program Initiative', 'Fix Versions', 'Initiative Title', 'Initiative Summary'
+  ];
+  
+  wrapColumns.forEach(colName => {
+    const colIndex = headers.indexOf(colName) + 1;
+    if (colIndex > 0) {
+      sheet.getRange(5, colIndex, sheet.getMaxRows() - 4, 1).setWrapStrategy(SpreadsheetApp.WrapStrategy.WRAP);
+    }
+  });
+
+  const columnWidths = {
+    'Key': 100, 'Parent Key': 100, 'Issue Type': 100, 'Summary': 300, 'Status': 100,
+    'Resolution': 100, 'Epic Name': 250, 'PI Objective': 300,
+    'Benefit Hypothesis': 300, 'Acceptance Criteria': 300,
+    'Value Stream/Org': 150, 'PI Commitment': 120, 'Scrum Team': 150, 'PI Target Iteration': 80, 
+    'Allocation': 80, 'PI Objective Status': 80,'Portfolio Initiative': 150, 'Program Initiative': 150, 'Investment (Story Points)': 80,
+    'Story Point Completion': 80, 'Total Child Issues': 80, 'Closed Child Issues': 80, '% Complete': 80,
+    'Business Value': 100, 'Actual Value': 100, 'RAG': 80, 'RAG Note': 200,
+    'Depends on Valuestream': 150,'Depends on Team': 150, 'Fix Versions': 150, 
+    'Start Iteration Name': 120, 'End Iteration Name': 120, 'Governance': 100, 'Momentum': 100, 
+    'Created Date': 120, 'Updated Date': 120, 'Last Refresh': 120
+  };
+
+  Object.entries(columnWidths).forEach(([colName, width]) => {
+    const colIndex = headers.indexOf(colName) + 1;
+    if (colIndex > 0) {
+      sheet.setColumnWidth(colIndex, width);
+    }
+  });
+
+  const percentCol = headers.indexOf('% Complete') + 1;
+  if (percentCol > 0 && sheet.getLastRow() >= 5) {
+      sheet.getRange(5, percentCol, sheet.getLastRow() - 4, 1).setNumberFormat('0"%"');
+  }
+}
+
+
+function highlightGovernanceMomentum(sheet, headers, startRow, numRows) {
+  const governanceCol = headers.indexOf('Governance') + 1;
+  const momentumCol = headers.indexOf('Momentum') + 1;
+
+  if (governanceCol > 0 && momentumCol > 0 && numRows > 0) {
+    const govValues = sheet.getRange(startRow, governanceCol, numRows, 1).getValues();
+    const momValues = sheet.getRange(startRow, momentumCol, numRows, 1).getValues();
+    
+    const govBackgrounds = govValues.map(val => [val[0] === 'Yes' ? '#c8e6c9' : null]);
+    const momBackgrounds = momValues.map(val => [val[0] === 'Yes' ? '#bbdefb' : null]);
+
+    sheet.getRange(startRow, governanceCol, numRows, 1).setBackgrounds(govBackgrounds);
+    sheet.getRange(startRow, momentumCol, numRows, 1).setBackgrounds(momBackgrounds);
+  }
+}
+
+// Helper function for merging perspectives during enrichment
+function mergeMultiplePerspectives(perspectives, epics, perspectiveType) {
+  if (perspectives.length === 0) return '';
+  if (perspectives.length === 1) return perspectives[0];
+  
+  const inputText = perspectives.map((p, idx) => 
+    `Epic ${idx + 1} (${epics[idx].issueKey}):\n${p}`
+  ).join('\n\n');
+  
+  const prompt = `You are creating an EXTREMELY BRIEF executive summary merging ${perspectives.length} epic ${perspectiveType} perspectives into ONE sentence for a governance presentation.
+
+  INPUT - Individual Epic Perspectives:
+  ${inputText}
+
+  TASK: Create ONE ultra-concise sentence that captures what is being delivered.
+
+  CRITICAL REQUIREMENTS:
+  1. Maximum 20 words - count every word carefully
+  2. ONE sentence only - no bullets, no lists, no line breaks
+  3. Focus on DELIVERABLES: what technologies, systems, or capabilities are being built
+  4. Include context but stay executive-friendly
+  5. Remove ALL filler words ("the", "a", "an" where possible)
+  6. Use action verbs (building, implementing, delivering, establishing, migrating)
+  7. NEVER use bullet points (•), dashes (-), or numbered lists
+  8. NEVER enumerate features like "Feature 1:", "Feature 2:"
+
+  STRUCTURE FORMULA:
+  [Action verb] + [specific technology/system] + [key capability/outcome]
+
+  FORBIDDEN PHRASES:
+  - "This PI will", "In this PI", "During this PI"
+  - "We will focus on", "The focus is on"
+  - "This epic will", "These epics will"
+  - "Here's", "The following", "As follows"
+  - Any bullet points or lists
+
+  GOOD EXAMPLES (all under 20 words):
+  ✓ "Building OAuth 2.0 authentication with SSO integration across three platforms"
+  ✓ "Migrating payment processing to microservices architecture with real-time reconciliation"
+  ✓ "Implementing AI-powered denial detection engine with automated claim resubmission workflows"
+
+  BAD EXAMPLES:
+  ✗ "This PI will focus on authentication" (forbidden phrase)
+  ✗ "• OAuth • SSO • Multi-factor" (bullets forbidden)
+  ✗ "Feature 1: Auth, Feature 2: SSO" (enumeration forbidden)
+
+  Return ONLY the merged sentence. No quotes. No formatting. No explanations. Count your words - stay under 20.`;
+
+  const MAX_RETRIES = 2;
+  let attempt = 0;
+  
+  while (attempt <= MAX_RETRIES) {
+    try {
+      const mergedPerspective = callGeminiAPI(prompt);
+      
+      if (mergedPerspective && typeof mergedPerspective === 'string') {
+        let cleaned = mergedPerspective.trim();
+        
+        // Remove AI artifacts
+        cleaned = cleaned.replace(/^["']|["']$/g, '');
+        cleaned = cleaned.replace(/^\*\*|^\*|\*\*$|\*$/g, '');
+        cleaned = cleaned.replace(/^```.*\n?|\n?```$/g, '');
+        cleaned = cleaned.replace(/^Here's.*?:\s*/i, '');
+        cleaned = cleaned.replace(/^The merged .*?:\s*/i, '');
+        cleaned = cleaned.replace(/^Summary:\s*/i, '');
+        
+        const wordCount = cleaned.split(/\s+/).length;
+        const hasBullets = /[•\-]\s/.test(cleaned) || /^\d+\.\s/.test(cleaned);
+        const hasMultipleSentences = (cleaned.match(/[.!?]+/g) || []).length > 1;
+        
+        const forbidden = [
+          'error:',
+          'i cannot',
+          'i apologize',
+          'as an ai',
+          'here is',
+          'here\'s',
+          'the following',
+          'this pi will',
+          'in this pi'
+        ];
+        
+        const hasError = forbidden.some(phrase => 
+          cleaned.toLowerCase().includes(phrase)
+        );
+        
+        if (!hasError && !hasBullets && !hasMultipleSentences && wordCount <= 20 && cleaned.length > 10) {
+          console.log(`✓ Merged ${perspectives.length} ${perspectiveType} perspectives (${wordCount} words)`);
+          return cleaned;
+        }
+        
+        console.warn(`Invalid AI response (attempt ${attempt + 1}): words=${wordCount}, bullets=${hasBullets}, errors=${hasError}`);
+      }
+    } catch (error) {
+      console.error(`Error merging (attempt ${attempt + 1}): ${error.message}`);
+    }
+    
+    attempt++;
+    if (attempt <= MAX_RETRIES) {
+      Utilities.sleep(500);
+    }
+  }
+  
+  // Final fallback
+  console.error(`AI merge failed after ${MAX_RETRIES + 1} attempts`);
+  return '***** PLEASE ADD MANUALLY *****';
+}
+function highlightEpicRows(sheet, headers, startRow, numRows) {
+  const issueTypeCol = headers.indexOf('Issue Type') + 1;
+  if (issueTypeCol === 0 || numRows <= 0) return;
+
+  const range = sheet.getRange(startRow, 1, numRows, headers.length);
+  const issueTypeValues = sheet.getRange(startRow, issueTypeCol, numRows, 1).getValues();
+
+  // Prepare a 2D array of background colors
+  const backgrounds = issueTypeValues.map(row => {
+    const rowBackgrounds = new Array(headers.length);
+    if (row[0] === 'Epic') {
+      rowBackgrounds.fill('#f3f3f3'); // Light grey color for epic rows
+    } else {
+      rowBackgrounds.fill(null); // No background for child rows
+    }
+    return rowBackgrounds;
+  });
+
+  // Apply all background colors in a single operation
+  range.setBackgrounds(backgrounds);
+}
+
+
