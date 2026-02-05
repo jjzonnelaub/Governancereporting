@@ -1259,12 +1259,24 @@ function addInitiativeToTable(table, initiative, dependencyMap) {
       
       // Show epic KEYS (not names/summary) - comma-separated on same line
       if (vsMap[vs].committed.length > 0) {
-        const committedKeys = vsMap[vs].committed.map(epic => epic['Key']).join(', ');
+        const committedKeys = vsMap[vs].committed.map(epic => {
+          if (piCommitmentFilter === 'All') {
+            const status = (epic['PI Commitment'] || '').trim();
+            return `${epic['Key']} - ${status || 'Blank'}`;
+          }
+          return epic['Key'];
+        }).join(', ');
         col1Content += '\nCommitted: ' + committedKeys + '\n';
       }
-      
+
       if (vsMap[vs].nonCommitted.length > 0) {
-        const nonCommittedKeys = vsMap[vs].nonCommitted.map(epic => epic['Key']).join(', ');
+        const nonCommittedKeys = vsMap[vs].nonCommitted.map(epic => {
+          if (piCommitmentFilter === 'All') {
+            const status = (epic['PI Commitment'] || '').trim();
+            return `${epic['Key']} - ${status || 'Blank'}`;
+          }
+          return epic['Key'];
+        }).join(', ');
         col1Content += '\nNon-Committed: ' + nonCommittedKeys + '\n';
       }
     });
