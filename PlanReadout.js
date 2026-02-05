@@ -45,28 +45,29 @@ function generateEpicPerspectives() {
       // Business Perspective Job
       const businessJob = {
         newColumnHeader: 'Business Perspective',
-        summaryPrompt: `Create a ONE-SENTENCE executive summary (maximum 20 words).
+        summaryPrompt: `RETURN RULES (HARD):
+- Return ONLY the final sentence. No labels, no quotes, no markdown, no extra text.
+- Exactly ONE sentence. No semicolons. No line breaks.
+- Exactly one period at the very end. No other periods in the response.
+- No colons (:), semicolons (;), or em dashes (—) to chain multiple ideas.
+- No bullet characters (-, •, *). No numbered lists.
+- If insufficient data, return exactly: N/A
 
-INSTRUCTIONS:
-Write a concise summary explaining the business value and what will be delivered.
+TASK:
+Write an executive micro-summary of the epic's BUSINESS VALUE.
 
-STRICT RULES:
-- EXACTLY ONE SENTENCE (no periods until the end)
-- MAXIMUM 20 WORDS - this is non-negotiable
-- Start with the subject: "The initiative...", "We are delivering...", "The team will implement..."
-- Focus on business outcome, not process
-- NO phrases like: "This PI will", "In this PI", "This work will focus on"
+STYLE RULES:
+- Maximum 25 words. If your response exceeds 25 words, shorten it.
+- First word must be a present-participle verb (e.g., Delivering, Enabling, Modernizing, Establishing, Streamlining, Automating)
+- BANNED first words: "Optimizing", "Enhancing", "Improving", "Updating" (too vague)
+- Format: [Verb] + [capability/outcome] + [who/why it matters]
+- Focus on business outcome: time saved, risk reduced, revenue protected, adoption improved
+- Avoid technical implementation details
+- BANNED phrases: "This PI will", "In this PI", "This work will focus on", "The team will"
+- Ignore any blank fields and work with what is available
 
-STRUCTURE:
-[Subject] + [action verb] + [what's being delivered] + [business value]
-
-Example (18 words): "The initiative modernizes payment processing to reduce transaction failures by 40% and improve customer satisfaction."
-
-If no initiative exists, summarize the epic's business value in one sentence under 20 words.
-If you cannot process the input, return "N/A"
-If input is empty, return "N/A"
-
-CRITICAL: Count your words before responding. If over 20 words, revise until under 20.`,
+EXAMPLE (22 words):
+"Delivering automated payment reconciliation for the billing team to reduce manual processing errors and accelerate month-end close by 3 days."`,
         sourceColumns: ['key', 'parentKey', 'summary', 'piObjective', 'benefitHypothesis', 'acceptanceCriteria', 'initiativeTitle', 'initiativeDescription'],
         filterColumn: 'issueType',
         filterValue: 'Epic'
@@ -75,23 +76,29 @@ CRITICAL: Count your words before responding. If over 20 words, revise until und
       // Technical Perspective Job
       const technicalJob = {
         newColumnHeader: 'Technical Perspective',
-        summaryPrompt: `Create a 2-3 sentence executive technical summary.
+        summaryPrompt: `RETURN RULES (HARD):
+- Return ONLY the final sentence. No labels, no quotes, no markdown, no extra text.
+- Exactly ONE sentence. No semicolons. No line breaks.
+- Exactly one period at the very end. No other periods in the response.
+- No colons (:), semicolons (;), or em dashes (—) to chain multiple ideas.
+- No bullet characters (-, •, *). No numbered lists.
+- If insufficient data, return exactly: N/A
 
-INSTRUCTIONS:
-Write a concise summary explaining what is being built technically.
+TASK:
+Write an executive micro-summary of WHAT IS BEING BUILT (technical deliverable).
 
-CRITICAL RULES:
-- EXACTLY ONE SENTENCE
-- MAXIMUM 20 WORDS - count before responding
-- Start with: "The feature...", "The system...", "The platform...", "This work..."
-- NEVER use: "This PI will", "In this PI", "Engineer will", "Engineers are", "We will", "The team will"
-- Use present tense: "delivers", "builds", "integrates", "establishes"
-- NO reference to "Epic" or "Initiative" - use "feature" or "program"
-- If any fields that we are pulling to read is blank ignore and process with the fields that contain data
+STYLE RULES:
+- Maximum 20 words. If your response exceeds 20 words, shorten it.
+- Start with: "The feature...", "The system...", or "The platform..."
+- Use exactly one main verb from: builds, integrates, migrates, implements, establishes, automates. Avoid chaining with "and."
+- Optional: one short "to..." clause at the end (maximum 6 words)
+- Focus on systems, capabilities, integrations, infrastructure — not process or staffing
+- BANNED phrases: "Engineers will", "We will", "The team will", "This PI will"
+- BANNED words: Epic, Initiative, Story — use "feature", "system", "platform" instead
+- Ignore any blank fields and work with what is available
 
-EXAMPLE (15 words): "The feature integrates OAuth authentication with legacy systems to improve security and user experience."
-
-If input is empty, return 'N/A'.`,
+EXAMPLE (16 words):
+"The platform integrates OAuth 2.0 authentication with legacy billing systems to enable single sign-on access."`,
         sourceColumns: ['key', 'parentKey', 'summary', 'piObjective', 'benefitHypothesis', 'acceptanceCriteria', 'initiativeTitle', 'initiativeDescription'],
         filterColumn: 'issueType',
         filterValue: 'Epic'
@@ -113,6 +120,7 @@ If input is empty, return 'N/A'.`,
     }
   }, { sheetName: SpreadsheetApp.getActiveSheet().getName() });
 }
+
 function generateInitiativePerspectives() {
   return logActivity('Initiative-Level Perspectives', () => {
     const ui = SpreadsheetApp.getUi();
@@ -153,7 +161,6 @@ function generateInitiativePerspectives() {
       
       const dataValues = sheet.getRange(headerRow + 1, 1, sheet.getLastRow() - headerRow, sheet.getLastColumn()).getValues();
 
-      // Generate BOTH merged perspectives in one call (matches your current code)
       ss.toast('Generating merged perspectives...', '🤖 AI Processing', 5);
       generateMergedInitiativePerspectives(ss, sheet, headers, dataValues, headerRow, COLUMN_MAPPINGS);
       
@@ -165,234 +172,147 @@ function generateInitiativePerspectives() {
     }
   }, { sheetName: SpreadsheetApp.getActiveSheet().getName() });
 }
+
 function summarizePlanReadout() {
- return logActivity('Business & Technical Perspective Summary', () => {
-  const ui = SpreadsheetApp.getUi();
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = ss.getActiveSheet();
+  return logActivity('Business & Technical Perspective Summary', () => {
+    const ui = SpreadsheetApp.getUi();
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.getActiveSheet();
 
-  const sheetName = sheet.getName();
-  if (!sheetName.includes('Governance') && !sheetName.match(/PI \d+ - Iteration \d+/)) {
-    ui.alert('Error', 'Please run this function on a valid report sheet.', ui.ButtonSet.OK);
-    return;
-  }
-  
-  ss.toast('Starting Plan Readout summary generation with initiative context...', '🔍 Analyzing Sheet', 10);
-  const headerRow = 4;
-
-  try {
-    // --- 1. DEFINE ENHANCED COLUMN MAPPINGS ---
-    const COLUMN_MAPPINGS = {
-      key: ['Key'],
-      parentKey: ['Parent Key'],
-      issueType: ['Issue Type'],
-      summary: ['Summary'],
-      piObjective: ['PI Objective'],
-      benefitHypothesis: ['Benefit Hypothesis'],
-      acceptanceCriteria: ['Acceptance Criteria'],
-      initiativeTitle: ['Initiative Title'],
-      initiativeDescription: ['Initiative Description']
-    };
+    const sheetName = sheet.getName();
+    if (!sheetName.includes('Governance') && !sheetName.match(/PI \d+ - Iteration \d+/)) {
+      ui.alert('Error', 'Please run this function on a valid report sheet.', ui.ButtonSet.OK);
+      return;
+    }
     
-    let headers = sheet.getRange(headerRow, 1, 1, sheet.getLastColumn()).getValues()[0].map(h => h.trim());
-    const dataValues = sheet.getRange(headerRow + 1, 1, sheet.getLastRow() - headerRow, sheet.getLastColumn()).getValues();
+    ss.toast('Starting Plan Readout summary generation with initiative context...', '🔍 Analyzing Sheet', 10);
+    const headerRow = 4;
 
-    // --- 2. DEFINE "BUSINESS PERSPECTIVE" JOB (EPIC-LEVEL) ---
-    const businessJob = {
-      newColumnHeader: 'Business Perspective',
-      summaryPrompt: `Create a ONE-SENTENCE executive summary (maximum 20 words).
+    try {
+      const COLUMN_MAPPINGS = {
+        key: ['Key'],
+        parentKey: ['Parent Key'],
+        issueType: ['Issue Type'],
+        summary: ['Summary'],
+        piObjective: ['PI Objective'],
+        benefitHypothesis: ['Benefit Hypothesis'],
+        acceptanceCriteria: ['Acceptance Criteria'],
+        initiativeTitle: ['Initiative Title'],
+        initiativeDescription: ['Initiative Description']
+      };
+      
+      let headers = sheet.getRange(headerRow, 1, 1, sheet.getLastColumn()).getValues()[0].map(h => h.trim());
+      const dataValues = sheet.getRange(headerRow + 1, 1, sheet.getLastRow() - headerRow, sheet.getLastColumn()).getValues();
 
-INSTRUCTIONS:
-1. First sentence: State the initiative's overall business goal
-2. Second sentence: Describe what will be delivered and its business value
-3. Third sentence (optional): Note key success criteria or outcomes
+      // Business Perspective Job
+      const businessJob = {
+        newColumnHeader: 'Business Perspective',
+        summaryPrompt: `RETURN RULES (HARD):
+- Return ONLY the final sentence. No labels, no quotes, no markdown, no extra text.
+- Exactly ONE sentence. No semicolons. No line breaks.
+- Exactly one period at the very end. No other periods in the response.
+- No colons (:), semicolons (;), or em dashes (—) to chain multiple ideas.
+- No bullet characters (-, •, *). No numbered lists.
+- If insufficient data, return exactly: N/A
 
-STRICT RULES:
-- EXACTLY ONE SENTENCE (no periods until the end)
-- MAXIMUM 20 WORDS - this is non-negotiable
-- Start with the subject: "The initiative...", "We are delivering...", "The team will implement..."
-- Focus on business outcome, not process
-- NO phrases like: "This PI will", "In this PI", "This work will focus on"
-- If any fields that we are pulling to read is blank ignore and process with the fields that contain data
+TASK:
+Write an executive micro-summary of the epic's BUSINESS VALUE.
 
-STRUCTURE:
-[Subject] + [action verb] + [what's being delivered] + [business value]
+STYLE RULES:
+- Maximum 25 words. If your response exceeds 25 words, shorten it.
+- First word must be a present-participle verb (e.g., Delivering, Enabling, Modernizing, Establishing, Streamlining, Automating)
+- BANNED first words: "Optimizing", "Enhancing", "Improving", "Updating" (too vague)
+- Format: [Verb] + [capability/outcome] + [who/why it matters]
+- Focus on business outcome: time saved, risk reduced, revenue protected, adoption improved
+- Avoid technical implementation details
+- BANNED phrases: "This PI will", "In this PI", "This work will focus on", "The team will"
+- Ignore any blank fields and work with what is available
 
-Example (18 words): "The initiative modernizes payment processing to reduce transaction failures by 40% and improve customer satisfaction."
+EXAMPLE (22 words):
+"Delivering automated payment reconciliation for the billing team to reduce manual processing errors and accelerate month-end close by 3 days."`,
+        sourceColumns: ['key', 'parentKey', 'summary', 'piObjective', 'benefitHypothesis', 'acceptanceCriteria', 'initiativeTitle', 'initiativeDescription'],
+        filterColumn: 'issueType',
+        filterValue: 'Epic'
+      };
+      
+      // Technical Perspective Job
+      const technicalJob = {
+        newColumnHeader: 'Technical Perspective',
+        summaryPrompt: `RETURN RULES (HARD):
+- Return ONLY the final sentence. No labels, no quotes, no markdown, no extra text.
+- Exactly ONE sentence. No semicolons. No line breaks.
+- Exactly one period at the very end. No other periods in the response.
+- No colons (:), semicolons (;), or em dashes (—) to chain multiple ideas.
+- No bullet characters (-, •, *). No numbered lists.
+- If insufficient data, return exactly: N/A
 
-If no initiative exists, summarize the epic's business value in one sentence under 20 words.
-If you cannot process the input, return "N/A"
-If input is empty, return "N/A"
+TASK:
+Write an executive micro-summary of WHAT IS BEING BUILT (technical deliverable).
 
-CRITICAL: Count your words before responding. If over 20 words, revise until under 20.`,
-      sourceColumns: ['key', 'parentKey', 'summary', 'piObjective', 'benefitHypothesis', 'acceptanceCriteria', 'initiativeTitle', 'initiativeDescription'],
-      filterColumn: 'issueType',
-      filterValue: 'Epic'
-    };
-    
-    // --- 3. DEFINE "TECHNICAL PERSPECTIVE" JOB (EPIC-LEVEL) ---
-    const technicalJob = {
-      newColumnHeader: 'Technical Perspective',
-      summaryPrompt: `Create a 2-3 sentence executive technical summary for a program governance presentation.
+STYLE RULES:
+- Maximum 20 words. If your response exceeds 20 words, shorten it.
+- Start with: "The feature...", "The system...", or "The platform..."
+- Use exactly one main verb from: builds, integrates, migrates, implements, establishes, automates. Avoid chaining with "and."
+- Optional: one short "to..." clause at the end (maximum 6 words)
+- Focus on systems, capabilities, integrations, infrastructure — not process or staffing
+- BANNED phrases: "Engineers will", "We will", "The team will", "This PI will"
+- BANNED words: Epic, Initiative, Story — use "feature", "system", "platform" instead
+- Ignore any blank fields and work with what is available
 
-INSTRUCTIONS:
-1. First sentence: State the initiative's overall technical goal
-2. Second sentence: Describe specific engineering work and deliverables
-3. Third sentence (optional): Note completion criteria or technical outcomes
+EXAMPLE (16 words):
+"The platform integrates OAuth 2.0 authentication with legacy billing systems to enable single sign-on access."`,
+        sourceColumns: ['key', 'parentKey', 'summary', 'piObjective', 'benefitHypothesis', 'acceptanceCriteria', 'initiativeTitle', 'initiativeDescription'],
+        filterColumn: 'issueType',
+        filterValue: 'Epic'
+      };
+      
+      // Execute epic-level jobs
+      ss.toast('Step 1/4: Generating Business Perspective (epic-level)...', '🤖 AI Processing', 5);
+      generateEnhancedPIReadoutHelper(ss, ui, sheet, headers, dataValues, headerRow, COLUMN_MAPPINGS, businessJob);
+      
+      headers = sheet.getRange(headerRow, 1, 1, sheet.getLastColumn()).getValues()[0].map(h => h.trim());
+      console.log(`Headers after Business Perspective: ${headers.length} columns`);
+      
+      ss.toast('Step 2/4: Generating Technical Perspective (epic-level)...', '🤖 AI Processing', 5);
+      generateEnhancedPIReadoutHelper(ss, ui, sheet, headers, dataValues, headerRow, COLUMN_MAPPINGS, technicalJob);
+      
+      headers = sheet.getRange(headerRow, 1, 1, sheet.getLastColumn()).getValues()[0].map(h => h.trim());
+      console.log(`Headers after Technical Perspective: ${headers.length} columns`);
+      
+      // Generate merged initiative-level perspectives
+      ss.toast('Step 3/4: Generating Merged Business Perspective (initiative-level)...', '🤖 AI Processing', 5);
+      generateMergedInitiativePerspectives(ss, sheet, headers, dataValues, headerRow, COLUMN_MAPPINGS, 'Business');
+      
+      headers = sheet.getRange(headerRow, 1, 1, sheet.getLastColumn()).getValues()[0].map(h => h.trim());
+      console.log(`Headers after Merged Business Perspective: ${headers.length} columns`);
+      
+      ss.toast('Step 4/4: Generating Merged Technical Perspective (initiative-level)...', '🤖 AI Processing', 5);
+      generateMergedInitiativePerspectives(ss, sheet, headers, dataValues, headerRow, COLUMN_MAPPINGS, 'Technical');
+      
+      ss.toast('✅ Plan Readout generation complete!', '✅ Success', 8);
 
-CRITICAL RULES:
-- EXACTLY ONE SENTENCE
-- MAXIMUM 20 WORDS - count before responding
-- Start with: "The feature...", "The system...", "The platform...", "This work..."
-- NEVER use: "This PI will", "In this PI", "Engineer will", "Engineers are", "Engineers will", "We will", "The team will", "The focus is"
-- Use present tense: "delivers", "builds", "integrates", "establishes", "provides"
-- NO reference to "Epic" or "Initiative" - use "feature" or "program"
-- If cannot process, return PI Objective trimmed to 15 words with asterisk
-- If any fields that we are pulling to read is blank ignore and process with the fields that contain data
-
-EXAMPLE GOOD STARTS:
-- "The feature establishes cloud-native authentication for enterprise users..."
-- "The system integrates OAuth 2.0 with existing infrastructure..."
-- "The platform delivers microservices architecture for patient data..."
-
-
-If input is empty, return 'N/A'.`,
-      sourceColumns: ['key', 'parentKey', 'summary', 'piObjective', 'benefitHypothesis', 'acceptanceCriteria', 'initiativeTitle', 'initiativeDescription'],
-      filterColumn: 'issueType',
-      filterValue: 'Epic'
-    };
-    
-    // --- 4. EXECUTE EPIC-LEVEL JOBS (IN ORDER) ---
-    ss.toast('Step 1/4: Generating Business Perspective (epic-level)...', '🤖 AI Processing', 5);
-    generateEnhancedPIReadoutHelper(ss, ui, sheet, headers, dataValues, headerRow, COLUMN_MAPPINGS, businessJob);
-    
-    // RE-READ HEADERS after Business Perspective column is added
-    headers = sheet.getRange(headerRow, 1, 1, sheet.getLastColumn()).getValues()[0].map(h => h.trim());
-    console.log(`Headers after Business Perspective: ${headers.length} columns`);
-    
-    ss.toast('Step 2/4: Generating Technical Perspective (epic-level)...', '🤖 AI Processing', 5);
-    generateEnhancedPIReadoutHelper(ss, ui, sheet, headers, dataValues, headerRow, COLUMN_MAPPINGS, technicalJob);
-    
-    // RE-READ HEADERS after Technical Perspective column is added
-    headers = sheet.getRange(headerRow, 1, 1, sheet.getLastColumn()).getValues()[0].map(h => h.trim());
-    console.log(`Headers after Technical Perspective: ${headers.length} columns`);
-    
-    // --- 5. GENERATE MERGED INITIATIVE-LEVEL PERSPECTIVES (IN ORDER) ---
-    ss.toast('Step 3/4: Generating Merged Business Perspective (initiative-level)...', '🤖 AI Processing', 5);
-    generateMergedInitiativePerspectives(ss, sheet, headers, dataValues, headerRow, COLUMN_MAPPINGS, 'Business');
-    
-    // RE-READ HEADERS after Merged Business Perspective column is added
-    headers = sheet.getRange(headerRow, 1, 1, sheet.getLastColumn()).getValues()[0].map(h => h.trim());
-    console.log(`Headers after Merged Business Perspective: ${headers.length} columns`);
-    
-    ss.toast('Step 4/4: Generating Merged Technical Perspective (initiative-level)...', '🤖 AI Processing', 5);
-    generateMergedInitiativePerspectives(ss, sheet, headers, dataValues, headerRow, COLUMN_MAPPINGS, 'Technical');
-    
-    ss.toast('✅ Plan Readout generation complete!', '✅ Success', 8);
-
-  } catch (error) {
-    console.error('Plan Readout Error:', error);
-    ui.alert('An Error Occurred', error.toString(), ui.ButtonSet.OK);
-  }
- }, { sheetName: SpreadsheetApp.getActiveSheet().getName() });
+    } catch (error) {
+      console.error('Plan Readout Error:', error);
+      ui.alert('An Error Occurred', error.toString(), ui.ButtonSet.OK);
+    }
+  }, { sheetName: SpreadsheetApp.getActiveSheet().getName() });
 }
 
 function generateSingleEpicPrompt(epicKey, contextText, perspectiveType) {
-  if (perspectiveType === 'Business') {
-    return `Create a ONE-SENTENCE executive summary (maximum 25 words).
-
-AVAILABLE DATA:
-${contextText}
-
-Write a concise summary explaining the business value and what will be delivered.
-
-RULES:
-- ONE SENTENCE maximum
-- MAXIMUM 25 WORDS
-- Start with: "The program..." or "We are delivering..."
-- Focus on business outcome
-- NO phrases: "This PI will", "In this PI"
-- If insufficient data, return "N/A"`;
-  } else {
-    return `Create ONE sentence explaining what is being built technically.
-
-AVAILABLE DATA:
-${contextText}
-
-Write a concise summary explaining what is being built technically.
-
-RULES:
-- EXACTLY ONE SENTENCE
-- MAXIMUM 20 WORDS - count before responding
-- Start with: "The feature...", "The system...", "The platform...", "This work..."
-- NEVER use: "Engineer will", "Engineers are", "We will", "The team will"
-- Use present tense: "delivers", "builds", "integrates"
-- NO reference to "Epic" or "Initiative" - use "feature" or "program"
-- If any fields that we are pulling to read is blank ignore and process with the fields that contain data
-- If insufficient data, return "N/A"`;
-  }
+  return buildSingleEpicPrompt(epicKey, contextText, perspectiveType);
 }
 
 function generateSingleEpicMergedPerspective(epicKey, contextText, perspectiveType) {
-  
-  let prompt = '';
-  
-  if (perspectiveType === 'Business') {
-    prompt = `Create a ONE-SENTENCE executive summary (maximum 20 words).
-
-AVAILABLE DATA:
-${contextText}
-
-INSTRUCTIONS:
-Write a concise summary explaining the business value and what will be delivered.
-
-STRICT RULES:
-- EXACTLY ONE SENTENCE (no periods until the end)
-- MAXIMUM 20 WORDS - this is non-negotiable
-- Start with the subject: "The initiative...", "We are delivering...", "The team will implement..."
-- Focus on business outcome, not process
-- NO phrases like: "This PI will", "In this PI", "This work will focus on"
-- If any fields that we are pulling to read is blank ignore and process with the fields that contain data
-
-STRUCTURE:
-[Subject] + [action verb] + [what's being delivered] + [business value]
-
-Example (18 words): "The initiative modernizes payment processing to reduce transaction failures by 40% and improve customer satisfaction."
-
-If no initiative exists, summarize the epic's business value in one sentence under 20 words.
-If you cannot process the input, return "N/A"
-If insufficient data, return "N/A"
-
-CRITICAL: Count your words before responding. If over 20 words, revise until under 20.`;
-    
-  } else {
-    // Technical perspective
-    prompt = `Create a 2-3 sentence executive technical summary for this feature.
-
-AVAILABLE DATA:
-${contextText}
-
-INSTRUCTIONS:
-Write a concise summary explaining what is being built technically.
-
-CRITICAL RULES:
-- EXACTLY ONE SENTENCE  
-- MAXIMUM 20 WORDS - count before responding
-- Start with: "The feature...", "The system...", "The platform...", "This work..."
-- NEVER use: "This PI will", "In this PI", "Engineer will", "Engineers are", "We will", "The team will"
-- Use present tense: "delivers", "builds", "integrates", "establishes"
-- NO reference to "Epic" or "Initiative" - use "feature" or "program"
-- If any fields that we are pulling to read is blank ignore and process with the fields that contain data
-- If insufficient data, return "N/A"`;
-  }
-  
-  return callGeminiAPIWithFallback(prompt, 'N/A*');
+  return callGeminiAPIWithFallback(
+    buildSingleEpicPrompt(epicKey, contextText, perspectiveType),
+    'N/A*'
+  );
 }
+
 function generateMergedInitiativePerspectives(ss, sheet, headers, dataValues, headerRow, COLUMN_MAPPINGS) {
   
   console.log('\n=== GENERATING MERGED PERSPECTIVES (BATCHED) ===');
   
-  // Get column indices
   const getColIndex = (mappingKey) => {
     const possibleNames = COLUMN_MAPPINGS[mappingKey];
     for (const name of possibleNames) {
@@ -406,7 +326,6 @@ function generateMergedInitiativePerspectives(ss, sheet, headers, dataValues, he
   const parentKeyCol = getColIndex('parentKey');
   const issueTypeCol = getColIndex('issueType');
   
-  // RAW DATA COLUMNS
   const summaryCol = getColIndex('summary');
   const epicNameCol = headers.indexOf('Epic Name');
   const piObjectiveCol = getColIndex('piObjective');
@@ -415,7 +334,6 @@ function generateMergedInitiativePerspectives(ss, sheet, headers, dataValues, he
   const initiativeTitleCol = getColIndex('initiativeTitle');
   const initiativeDescCol = getColIndex('initiativeDescription');
   
-  // Verify prerequisite columns exist
   const businessPerspectiveCol = headers.indexOf('Business Perspective');
   const technicalPerspectiveCol = headers.indexOf('Technical Perspective');
   
@@ -426,14 +344,12 @@ function generateMergedInitiativePerspectives(ss, sheet, headers, dataValues, he
     throw new Error('Technical Perspective column not found! Make sure epic-level perspectives are generated first.');
   }
   
-  // Find or create the MERGED perspective columns with proper indexing
   const mergedBusinessColumnName = 'Merged Business Perspective';
   const mergedTechnicalColumnName = 'Merged Technical Perspective';
   
-  let mergedBusinessColNumber;  // 1-based column number
-  let mergedTechnicalColNumber; // 1-based column number
+  let mergedBusinessColNumber;
+  let mergedTechnicalColNumber;
   
-  // Check if Merged Business Perspective exists
   const mergedBusinessIdx = headers.indexOf(mergedBusinessColumnName);
   if (mergedBusinessIdx === -1) {
     const currentLastCol = sheet.getLastColumn();
@@ -450,7 +366,6 @@ function generateMergedInitiativePerspectives(ss, sheet, headers, dataValues, he
     console.log(`Found "${mergedBusinessColumnName}" at column ${mergedBusinessColNumber} (${columnNumberToLetter(mergedBusinessColNumber)})`);
   }
   
-  // Check if Merged Technical Perspective exists
   const mergedTechnicalIdx = headers.indexOf(mergedTechnicalColumnName);
   if (mergedTechnicalIdx === -1) {
     const currentLastCol = sheet.getLastColumn();
@@ -467,7 +382,6 @@ function generateMergedInitiativePerspectives(ss, sheet, headers, dataValues, he
     console.log(`Found "${mergedTechnicalColumnName}" at column ${mergedTechnicalColNumber} (${columnNumberToLetter(mergedTechnicalColNumber)})`);
   }
   
-  // Group epics by Parent Key
   const initiativeGroups = {};
   
   dataValues.forEach((row, rowIndex) => {
@@ -500,7 +414,6 @@ function generateMergedInitiativePerspectives(ss, sheet, headers, dataValues, he
   const initiativeKeys = Object.keys(initiativeGroups);
   console.log(`Processing ${initiativeKeys.length} initiatives with BATCHED AI calls`);
   
-  // --- BUILD BATCH TASKS ---
   const businessTasks = [];
   const technicalTasks = [];
   
@@ -508,7 +421,6 @@ function generateMergedInitiativePerspectives(ss, sheet, headers, dataValues, he
     const epicRowIndices = epics.map(e => e.rowIndex);
     
     if (epics.length === 1) {
-      // Single epic - build from raw data
       const epic = epics[0];
       
       let contextText = '';
@@ -521,20 +433,17 @@ function generateMergedInitiativePerspectives(ss, sheet, headers, dataValues, he
       if (epic.acceptanceCriteria) contextText += `Acceptance: ${epic.acceptanceCriteria}\n`;
       
       if (contextText.length > 50) {
-        // Generate prompts for single epic
         const businessPrompt = buildSingleEpicPrompt(epic.key, contextText, 'Business');
         const technicalPrompt = buildSingleEpicPrompt(epic.key, contextText, 'Technical');
         
         businessTasks.push({ parentKey, prompt: businessPrompt, epicRowIndices });
         technicalTasks.push({ parentKey, prompt: technicalPrompt, epicRowIndices });
       } else {
-        // Not enough data
         businessTasks.push({ parentKey, prompt: null, directValue: 'N/A*', epicRowIndices });
         technicalTasks.push({ parentKey, prompt: null, directValue: 'N/A*', epicRowIndices });
       }
       
     } else {
-      // Multiple epics - generate merged perspective
       const initiativeTitle = epics[0].initiativeTitle || 'Unknown Initiative';
       const initiativeDescription = epics[0].initiativeDescription || '';
       
@@ -558,13 +467,9 @@ function generateMergedInitiativePerspectives(ss, sheet, headers, dataValues, he
   
   console.log(`Built ${businessTasks.length} business tasks and ${technicalTasks.length} technical tasks`);
   
-  // --- PROCESS BUSINESS PERSPECTIVES IN BATCHES ---
   const businessResults = processBatchedTasks(businessTasks, 'Business', ss);
-  
-  // --- PROCESS TECHNICAL PERSPECTIVES IN BATCHES ---
   const technicalResults = processBatchedTasks(technicalTasks, 'Technical', ss);
   
-  // --- WRITE ALL RESULTS TO SHEET ---
   console.log('Writing all results to sheet...');
   let writtenCount = 0;
   
@@ -587,43 +492,66 @@ function generateMergedInitiativePerspectives(ss, sheet, headers, dataValues, he
   console.log(`✓ Generated and wrote ${businessTasks.length} merged perspectives (batched processing)`);
 }
 
-// Helper: Build single epic prompt
 function buildSingleEpicPrompt(epicKey, contextText, perspectiveType) {
+  const header = `RETURN RULES (HARD):
+- Return ONLY the final sentence. No labels, no quotes, no markdown, no extra text.
+- Exactly ONE sentence. No semicolons. No line breaks.
+- Exactly one period at the very end. No other periods in the response.
+- No colons (:), semicolons (;), or em dashes (—) to chain multiple ideas.
+- No bullet characters (-, •, *). No numbered lists.
+- If insufficient data, return exactly: N/A
+
+AVAILABLE DATA:
+${contextText}
+`;
+
   if (perspectiveType === 'Business') {
-    return `Create a concise business summary (under 50 words).
+    return `${header}
+TASK:
+Write an executive micro-summary of the epic's BUSINESS VALUE.
 
-AVAILABLE DATA:
-${contextText}
+STYLE RULES:
+- Maximum 25 words. If your response exceeds 25 words, shorten it.
+- First word must be a present-participle verb (e.g., Delivering, Enabling, Modernizing, Establishing, Streamlining, Automating)
+- BANNED first words: "Optimizing", "Enhancing", "Improving", "Updating" (too vague)
+- Format: [Verb] + [capability/outcome] + [who/why it matters]
+- Focus on business outcome: time saved, risk reduced, revenue protected, adoption improved
+- Avoid technical implementation details
+- BANNED phrases: "This PI will", "In this PI", "This work will focus on", "The team will"
+- Ignore any blank fields and work with what is available
 
-Write a summary explaining the business value and what will be delivered.
-
-RULES:
-- Under 50 words
-- Start with: "The program..." or "We are delivering..."
-- Focus on business outcome
-- NO phrases: "This PI will", "In this PI"
-- If insufficient data, return "N/A"`;
-  } else {
-    return `Create a concise technical summary (under 50 words).
-
-AVAILABLE DATA:
-${contextText}
-
-Write a summary explaining what is being built technically.
-
-RULES:
-- Under 50 words
-- Start immediately with the subject
-- Use clear technical language
-- Do not reference "Epic" or "Initiative", use "feature" or "program"
-- If insufficient data, return "N/A"`;
+EXAMPLE (22 words):
+"Delivering automated payment reconciliation for the billing team to reduce manual processing errors and accelerate month-end close by 3 days."`;
   }
+
+  return `${header}
+TASK:
+Write an executive micro-summary of WHAT IS BEING BUILT (technical deliverable).
+
+STYLE RULES:
+- Maximum 20 words. If your response exceeds 20 words, shorten it.
+- Start with: "The feature...", "The system...", or "The platform..."
+- Use exactly one main verb from: builds, integrates, migrates, implements, establishes, automates. Avoid chaining with "and."
+- Optional: one short "to..." clause at the end (maximum 6 words)
+- Focus on systems, capabilities, integrations, infrastructure — not process or staffing
+- BANNED phrases: "Engineers will", "We will", "The team will", "This PI will"
+- BANNED words: Epic, Initiative, Story — use "feature", "system", "platform" instead
+- Ignore any blank fields and work with what is available
+
+EXAMPLE (16 words):
+"The platform integrates OAuth 2.0 authentication with legacy billing systems to enable single sign-on access."`;
 }
 
-// Helper: Build merged prompt
 function buildMergedPrompt(initiativeTitle, parentKey, initiativeDescription, epicContextDetails, perspectiveType) {
+  const header = `RETURN RULES (HARD):
+- Return ONLY the summary sentences. No labels, no quotes, no markdown, no extra text.
+- Each sentence ends with exactly one period. No other punctuation used as sentence separators.
+- No colons (:), semicolons (;), or em dashes (—) to chain multiple ideas.
+- No bullet characters (-, •, *). No numbered lists.
+- If insufficient data, return exactly: N/A`;
+
   if (perspectiveType === 'Business') {
-    return `You are writing a brief business perspective summary for an executive presentation about this initiative.
+    return `${header}
 
 INITIATIVE:
 Title: ${initiativeTitle}
@@ -633,19 +561,24 @@ ${initiativeDescription ? `Description: ${initiativeDescription}` : ''}
 CHILD EPICS:
 ${epicContextDetails}
 
-INSTRUCTIONS:
-Explain the business value across all epics in under 50 words.
+TASK:
+Synthesize the epics into ONE cohesive initiative-level value proposition.
 
-RULES:
-- Start with: "The program..." or "We are delivering..."
-- NO phrases: "This PI will", "Epic 1", "Epic 2"
-- Synthesize across ALL epics
-- Maximum 50 words
-- Do not reference "Epic" or "Initiative", use "program" or "feature"
-- If insufficient data, return "N/A"`;
+STYLE RULES:
+- 2-3 sentences, maximum 50 words total. If your response exceeds 50 words, shorten it.
+- Sentence 1: The business problem or opportunity this initiative addresses
+- Sentence 2: What capability is being delivered across the epics
+- Sentence 3 (optional): Expected business outcome or impact
+- SYNTHESIZE across all epics — do not list them individually
+- Start with: "The program..." or "This initiative..."
+- BANNED: "Epic 1", "Epic 2", "This PI will"
+- Use "program" or "feature" instead of "Epic" or "Initiative"
+
+GOOD: "The authentication program addresses growing security risks across customer-facing platforms. It delivers unified identity management with multi-factor authentication, reducing unauthorized access incidents while improving login experience."
+
+BAD: "Epic 1 implements OAuth. Epic 2 adds MFA. Epic 3 handles permissions."`;
   } else {
-    return `You are writing a brief technical perspective summary for an executive presentation about this initiative.
-
+    return `${header}
 
 INITIATIVE:
 Title: ${initiativeTitle}
@@ -655,22 +588,24 @@ ${initiativeDescription ? `Description: ${initiativeDescription}` : ''}
 CHILD EPICS:
 ${epicContextDetails}
 
-INSTRUCTIONS:
-Write ONE sentence explaining what is being built technically for this initiative.
-.
+TASK:
+Synthesize the epics into ONE cohesive initiative-level technical overview.
 
-RULES:
-- EXACTLY ONE SENTENCE
-- MAXIMUM 20 WORDS - count before responding
-- Start with: "The initiative...", "The system...", "The platform...", "This work..."
-- NEVER use: "Engineer will", "Engineers are", "Engineers will", "We will", "The team will"
-- Use present tense: "delivers", "builds", "integrates", "establishes"
-- Focus on WHAT is being delivered technically
-- If insufficient data, return "N/A"`;
+STYLE RULES:
+- 2-3 sentences, maximum 50 words total. If your response exceeds 50 words, shorten it.
+- Describe the OVERALL technical approach and key systems involved
+- SYNTHESIZE across all epics — do not list them individually
+- Start with: "The program builds..." or "The system delivers..."
+- BANNED: "Epic 1", "Epic 2", "This PI will"
+- Use "program" or "system" instead of "Epic" or "Initiative"
+- Technical language appropriate for executive audience
+
+GOOD: "The program builds a cloud-native authentication framework using OAuth 2.0 and SAML, integrating with existing identity providers to enable unified access management across web and mobile platforms."
+
+BAD: "Epic 1 does OAuth API. Epic 2 builds frontend. Epic 3 adds database."`;
   }
 }
 
-// Helper: Process tasks in batches
 function processBatchedTasks(tasks, perspectiveType, ss) {
   const tasksNeedingAI = tasks.filter(t => t.prompt !== null);
   const results = new Map();
@@ -699,11 +634,9 @@ function processBatchedTasks(tasks, perspectiveType, ss) {
     
     console.log(`Processing ${perspectiveType} batch ${currentBatchNum}/${totalBatches}`);
     
-    // Call AI batch summarization
-    const batchInstruction = `You are creating executive ${perspectiveType.toLowerCase()} summaries for program governance. Each input describes an initiative. Create concise summaries under 50 words each.`;
+    const batchInstruction = getMergedPerspectiveInstructions(perspectiveType);
     const batchResults = batchSummarize(batchPrompts, batchInstruction);
     
-    // Map results back to parentKeys
     batch.forEach((task, idx) => {
       results.set(task.parentKey, batchResults[idx]);
     });
@@ -715,7 +648,6 @@ function processBatchedTasks(tasks, perspectiveType, ss) {
   return results;
 }
 
-// Helper function to convert column number to letter
 function columnNumberToLetter(column) {
   let temp, letter = '';
   while (column > 0) {
@@ -726,75 +658,71 @@ function columnNumberToLetter(column) {
   return letter;
 }
 
-
 function generateMergedPrompt(initiativeTitle, initiativeDescription, epicPerspectives, perspectiveType) {
+  const header = `RETURN RULES (HARD):
+- Return ONLY the summary sentences. No labels, no quotes, no markdown, no extra text.
+- Each sentence ends with exactly one period. No other punctuation used as sentence separators.
+- No colons (:), semicolons (;), or em dashes (—) to chain multiple ideas.
+- No bullet characters (-, •, *). No numbered lists.
+- If insufficient data, return exactly: N/A`;
+
   if (perspectiveType === 'Business') {
-    return `Merge these executive business summaries into ONE cohesive summary for the INITIATIVE.
+    return `${header}
 
-INITIATIVE:
-Title: ${initiativeTitle}
+INITIATIVE: ${initiativeTitle}
 ${initiativeDescription ? `Description: ${initiativeDescription}` : ''}
 
 CHILD EPIC SUMMARIES:
 ${epicPerspectives}
 
-INSTRUCTIONS:
-Create ONE unified 2-3 sentence summary (maximum 50 words) that:
-1. States the initiative's OVERALL business goal
-2. Describes the COLLECTIVE business value
+TASK:
+Synthesize these epic-level business summaries into ONE cohesive initiative-level value proposition.
 
-CRITICAL RULES:
-- MERGE perspectives into one cohesive statement
-- Start with: "The program modernizes..." or "We are delivering..."
-- NEVER use: "This PI will", "Epic 1", "Epic 2"
-- NO bullet points or lists
-- Maximum 50 words
-- Do not reference "Epic" or "Initiative", use "program" or "feature"
-- Focus on BIG PICTURE
+STYLE RULES:
+- 2-3 sentences, maximum 50 words total. If your response exceeds 50 words, shorten it.
+- Sentence 1: The business problem or opportunity this initiative addresses
+- Sentence 2: What capability is being delivered across the epics
+- Sentence 3 (optional): Expected business outcome or impact
+- SYNTHESIZE across all epics — do not list them individually
+- Start with: "The program..." or "This initiative..."
+- BANNED: "Epic 1", "Epic 2", "This PI will"
+- Use "program" or "feature" instead of "Epic" or "Initiative"
 
-GOOD EXAMPLE:
-"The authentication program establishes secure identity management across web and mobile platforms, reducing security risks while improving user experience."
+GOOD: "The authentication program addresses growing security risks across customer-facing platforms. It delivers unified identity management with multi-factor authentication, reducing unauthorized access incidents while improving login experience."
 
-BAD EXAMPLE:
-"Epic 1 implements OAuth. Epic 2 adds MFA. Epic 3 handles permissions."`;
+BAD: "Epic 1 implements OAuth. Epic 2 adds MFA. Epic 3 handles permissions."`;
   } else {
-    return `Merge these executive technical summaries into ONE cohesive summary for the INITIATIVE.
+    return `${header}
 
-INITIATIVE:
-Title: ${initiativeTitle}
+INITIATIVE: ${initiativeTitle}
 ${initiativeDescription ? `Description: ${initiativeDescription}` : ''}
 
 CHILD EPIC SUMMARIES:
 ${epicPerspectives}
 
-INSTRUCTIONS:
-Create ONE unified 2-3 sentence summary (maximum 50 words) that:
-1. States the initiative's OVERALL technical goal
-2. Describes the COLLECTIVE engineering work
+TASK:
+Synthesize these epic-level technical summaries into ONE cohesive initiative-level technical overview.
 
-CRITICAL RULES:
-- MERGE perspectives into one cohesive statement
-- Start with: "Engineers are building..." or "The system provides..."
-- NEVER use: "This PI will", "Epic 1", "Epic 2"
-- NO bullet points or lists
-- Maximum 50 words
-- Do not reference "Epic" or "Initiative", use "program" or "feature"
-- Use technical language for executives
+STYLE RULES:
+- 2-3 sentences, maximum 50 words total. If your response exceeds 50 words, shorten it.
+- Describe the OVERALL technical approach and key systems involved
+- SYNTHESIZE across all epics — do not list them individually
+- Start with: "The program builds..." or "The system delivers..."
+- BANNED: "Epic 1", "Epic 2", "This PI will"
+- Use "program" or "system" instead of "Epic" or "Initiative"
+- Technical language appropriate for executive audience
 
-GOOD EXAMPLE:
-"Engineers are building a cloud-native authentication framework using OAuth 2.0, integrating with existing identity providers for seamless user management."
+GOOD: "The program builds a cloud-native authentication framework using OAuth 2.0 and SAML, integrating with existing identity providers to enable unified access management across web and mobile platforms."
 
-BAD EXAMPLE:
-"Epic 1 does OAuth API. Epic 2 builds frontend. Epic 3 adds database."`;
+BAD: "Epic 1 does OAuth API. Epic 2 builds frontend. Epic 3 adds database."`;
   }
 }
 
-// Helper function to get batch-level instructions
 function getMergedPerspectiveInstructions(perspectiveType) {
   if (perspectiveType === 'Business') {
-    return `You are creating executive business summaries. Each input describes an initiative with multiple epics. Merge the epic summaries into ONE cohesive statement about the overall initiative's business value. Keep each response under 50 words.`;
+    return `You are creating executive business value propositions. Each input describes an initiative with child epics. Synthesize into ONE cohesive statement: what business problem is addressed, what capability is delivered, and expected impact. Maximum 50 words per response. No bullet points. No "Epic 1/2/3" references. No colons or em dashes to chain ideas. Each sentence ends with exactly one period.`;
   } else {
-    return `You are creating executive technical summaries. Each input describes an initiative with multiple epics. Merge the epic summaries into ONE cohesive statement about the overall initiative's technical work. Keep each response under 50 words.`;
+    return `You are creating executive technical overviews. Each input describes an initiative with child epics. Synthesize into ONE cohesive statement: what systems are being built, key technologies involved, and technical approach. Maximum 50 words per response. No bullet points. No "Epic 1/2/3" references. No colons or em dashes to chain ideas. Each sentence ends with exactly one period.`;
   }
 }
 
@@ -803,14 +731,13 @@ function generateEnhancedPIReadoutHelper(ss, ui, sheet, headers, dataValues, hea
   const { newColumnHeader, summaryPrompt, sourceColumns, filterColumn, filterValue } = jobConfig;
   ss.toast(`Processing "${newColumnHeader}" with initiative context...`, '🧠 Thinking...', 10);
 
-  // --- 1. BUILD COLUMN INDEX MAP ---
   const colMap = {};
   for (const key of sourceColumns) {
     const possibleNames = COLUMN_MAPPINGS[key];
     const index = headers.findIndex(header => possibleNames.includes(header));
     if (index === -1) {
       console.warn(`Column not found: ${possibleNames.join(', ')} - will use empty values`);
-      colMap[key] = -1; // Mark as not found
+      colMap[key] = -1;
     } else {
       colMap[key] = index;
     }
@@ -821,7 +748,6 @@ function generateEnhancedPIReadoutHelper(ss, ui, sheet, headers, dataValues, hea
     throw new Error(`Could not find filter column. Missing: [${COLUMN_MAPPINGS[filterColumn].join(', ')}]`);
   }
 
-  // --- 2. CREATE OR LOCATE DESTINATION COLUMN ---
   let destCol = headers.indexOf(newColumnHeader);
   if (destCol === -1) {
     destCol = sheet.getLastColumn() + 1;
@@ -829,25 +755,21 @@ function generateEnhancedPIReadoutHelper(ss, ui, sheet, headers, dataValues, hea
       .setFontWeight('bold').setBackground('#9b7bb8');
     sheet.setColumnWidth(destCol, 400);
   } else {
-    destCol += 1; // Convert to 1-based
+    destCol += 1;
   }
 
-  // --- 3. COLLECT EPIC DATA WITH INITIATIVE CONTEXT ---
   const summaryTasks = [];
   
   for (let i = 0; i < dataValues.length; i++) {
     const row = dataValues[i];
     
-    // Only process epics
     if (row[filterCol] !== filterValue) continue;
     
-    // Helper function to safely get column value
     const getVal = (colKey) => {
       const idx = colMap[colKey];
       return (idx >= 0 && row[idx]) ? String(row[idx]).trim() : '';
     };
     
-    // Extract all relevant data
     const epicKey = getVal('key');
     const parentKey = getVal('parentKey');
     const epicSummary = getVal('summary');
@@ -857,10 +779,8 @@ function generateEnhancedPIReadoutHelper(ss, ui, sheet, headers, dataValues, hea
     const initiativeTitle = getVal('initiativeTitle');
     const initiativeDescription = getVal('initiativeDescription');
     
-    // Build context-rich input text
     let combinedText = '';
     
-    // Add initiative context if available
     if (parentKey && (initiativeTitle || initiativeDescription)) {
       combinedText += `=== OVERALL INITIATIVE (Parent: ${parentKey}) ===\n`;
       if (initiativeTitle) {
@@ -874,7 +794,6 @@ function generateEnhancedPIReadoutHelper(ss, ui, sheet, headers, dataValues, hea
       combinedText += `=== EPIC ${epicKey} (No Parent Initiative) ===\n`;
     }
     
-    // Add epic-level details
     if (epicSummary) {
       combinedText += `Epic Summary: ${epicSummary}\n`;
     }
@@ -888,7 +807,6 @@ function generateEnhancedPIReadoutHelper(ss, ui, sheet, headers, dataValues, hea
       combinedText += `Acceptance Criteria: ${acceptanceCriteria}\n`;
     }
     
-    // Only add task if there's meaningful content
     if (combinedText.length > 100) {
       summaryTasks.push({ 
         text: combinedText, 
@@ -900,13 +818,14 @@ function generateEnhancedPIReadoutHelper(ss, ui, sheet, headers, dataValues, hea
   }
 
   if (summaryTasks.length === 0) {
-    ui.alert(`"${newColumnHeader}" Job: No epics with sufficient data were found on this sheet.`);
+    if (ui) {
+      ui.alert(`"${newColumnHeader}" Job: No epics with sufficient data were found on this sheet.`);
+    }
     return;
   }
   
   console.log(`Found ${summaryTasks.length} epics to summarize (${summaryTasks.filter(t => t.hasInitiative).length} with initiative context)`);
 
-  // --- 4. PROCESS IN BATCHES ---
   const BATCH_SIZE = 25;
   const outputRange = sheet.getRange(headerRow + 1, destCol, dataValues.length, 1);
   const outputValues = outputRange.getValues();
@@ -923,10 +842,8 @@ function generateEnhancedPIReadoutHelper(ss, ui, sheet, headers, dataValues, hea
       15
     );
 
-    // Call AI batch summarization
     const batchSummaries = batchSummarize(batchTexts, summaryPrompt);
 
-    // Validate response
     if (batchSummaries.length !== batchTasks.length) {
       console.error(`Batch ${currentBatchNum} mismatch: Expected ${batchTasks.length}, got ${batchSummaries.length}`);
       batchTasks.forEach(task => {
@@ -935,19 +852,18 @@ function generateEnhancedPIReadoutHelper(ss, ui, sheet, headers, dataValues, hea
       continue;
     }
 
-    // Map summaries back to sheet rows
     batchSummaries.forEach((summary, j) => {
       const originalIndex = batchTasks[j].index;
       outputValues[originalIndex][0] = summary;
     });
   }
 
-  // --- 5. WRITE ALL DATA BACK ---
   outputRange.setValues(outputValues);
   outputRange.setWrapStrategy(SpreadsheetApp.WrapStrategy.WRAP);
 
   ss.toast(`✅ "${newColumnHeader}" complete!`, '✅ Success', 5);
 }
+
 function generateEpicPerspectivesOnSheet(targetSheet) {
   const ss = targetSheet.getParent();
   const sheet = targetSheet;
@@ -977,29 +893,31 @@ function generateEpicPerspectivesOnSheet(targetSheet) {
     let headers = sheet.getRange(headerRow, 1, 1, sheet.getLastColumn()).getValues()[0].map(h => h.trim());
     const dataValues = sheet.getRange(headerRow + 1, 1, sheet.getLastRow() - headerRow, sheet.getLastColumn()).getValues();
 
-    // Business Perspective
     const businessJob = {
       newColumnHeader: 'Business Perspective',
-      summaryPrompt: `Create a ONE-SENTENCE executive summary (maximum 20 words).
+      summaryPrompt: `RETURN RULES (HARD):
+- Return ONLY the final sentence. No labels, no quotes, no markdown, no extra text.
+- Exactly ONE sentence. No semicolons. No line breaks.
+- Exactly one period at the very end. No other periods in the response.
+- No colons (:), semicolons (;), or em dashes (—) to chain multiple ideas.
+- No bullet characters (-, •, *). No numbered lists.
+- If insufficient data, return exactly: N/A
 
-INSTRUCTIONS:
-Write a concise summary explaining the business value and what will be delivered.
+TASK:
+Write an executive micro-summary of the epic's BUSINESS VALUE.
 
-STRICT RULES:
-- EXACTLY ONE SENTENCE (no periods until the end)
-- MAXIMUM 20 WORDS - this is non-negotiable
-- Start with the subject: "The initiative...", "We are delivering...", "The team will implement..."
-- Focus on business outcome, not process
-- NO phrases like: "This PI will", "In this PI", "This work will focus on"
+STYLE RULES:
+- Maximum 25 words. If your response exceeds 25 words, shorten it.
+- First word must be a present-participle verb (e.g., Delivering, Enabling, Modernizing, Establishing, Streamlining, Automating)
+- BANNED first words: "Optimizing", "Enhancing", "Improving", "Updating" (too vague)
+- Format: [Verb] + [capability/outcome] + [who/why it matters]
+- Focus on business outcome: time saved, risk reduced, revenue protected, adoption improved
+- Avoid technical implementation details
+- BANNED phrases: "This PI will", "In this PI", "This work will focus on", "The team will"
+- Ignore any blank fields and work with what is available
 
-STRUCTURE:
-[Subject] + [action verb] + [what's being delivered] + [business value]
-
-If no initiative exists, summarize the epic's business value in one sentence under 20 words.
-If you cannot process the input, return "N/A"
-If input is empty, return "N/A"
-
-CRITICAL: Count your words before responding.`,
+EXAMPLE (22 words):
+"Delivering automated payment reconciliation for the billing team to reduce manual processing errors and accelerate month-end close by 3 days."`,
       sourceColumns: ['key', 'summary', 'piObjective', 'benefitHypothesis', 'acceptanceCriteria', 'initiativeTitle', 'initiativeDescription'],
       filterColumn: 'issueType',
       filterValue: 'Epic'
@@ -1007,32 +925,33 @@ CRITICAL: Count your words before responding.`,
     
     generateEnhancedPIReadoutHelper(ss, null, sheet, headers, dataValues, headerRow, COLUMN_MAPPINGS, businessJob);
     
-    // Refresh headers after business perspective column added
     headers = sheet.getRange(headerRow, 1, 1, sheet.getLastColumn()).getValues()[0].map(h => h.trim());
     
-    // Technical Perspective
     const technicalJob = {
       newColumnHeader: 'Technical Perspective',
-      summaryPrompt: `Create a ONE-SENTENCE technical summary (maximum 20 words).
+      summaryPrompt: `RETURN RULES (HARD):
+- Return ONLY the final sentence. No labels, no quotes, no markdown, no extra text.
+- Exactly ONE sentence. No semicolons. No line breaks.
+- Exactly one period at the very end. No other periods in the response.
+- No colons (:), semicolons (;), or em dashes (—) to chain multiple ideas.
+- No bullet characters (-, •, *). No numbered lists.
+- If insufficient data, return exactly: N/A
 
-INSTRUCTIONS:
-Write a concise summary explaining the key technical work and deliverables.
+TASK:
+Write an executive micro-summary of WHAT IS BEING BUILT (technical deliverable).
 
-STRICT RULES:
-- EXACTLY ONE SENTENCE (no periods until the end)
-- MAXIMUM 20 WORDS - this is non-negotiable  
-- Start with action verb: "Implementing...", "Building...", "Establishing...", "Migrating..."
-- Focus on WHAT is being built technically (systems, APIs, infrastructure)
-- NO phrases like: "Engineer will", "The team is working on", "This involves"
+STYLE RULES:
+- Maximum 20 words. If your response exceeds 20 words, shorten it.
+- Start with: "The feature...", "The system...", or "The platform..."
+- Use exactly one main verb from: builds, integrates, migrates, implements, establishes, automates. Avoid chaining with "and."
+- Optional: one short "to..." clause at the end (maximum 6 words)
+- Focus on systems, capabilities, integrations, infrastructure — not process or staffing
+- BANNED phrases: "Engineers will", "We will", "The team will", "This PI will"
+- BANNED words: Epic, Initiative, Story — use "feature", "system", "platform" instead
+- Ignore any blank fields and work with what is available
 
-STRUCTURE:
-[Action verb] + [technical deliverable] + [system/capability context]
-
-If no initiative exists, summarize the epic's technical work in one sentence under 20 words.
-If you cannot process the input, return "N/A"
-If input is empty, return "N/A"
-
-CRITICAL: Count your words before responding.`,
+EXAMPLE (16 words):
+"The platform integrates OAuth 2.0 authentication with legacy billing systems to enable single sign-on access."`,
       sourceColumns: ['key', 'summary', 'piObjective', 'benefitHypothesis', 'acceptanceCriteria', 'initiativeTitle', 'initiativeDescription'],
       filterColumn: 'issueType',
       filterValue: 'Epic'
@@ -1048,10 +967,6 @@ CRITICAL: Count your words before responding.`,
   }
 }
 
-/**
- * Generates initiative perspectives on a specific sheet (for pipeline use)
- * @param {Sheet} targetSheet - The sheet to process
- */
 function generateInitiativePerspectivesOnSheet(targetSheet) {
   const ss = targetSheet.getParent();
   const sheet = targetSheet;
@@ -1095,4 +1010,68 @@ function generateInitiativePerspectivesOnSheet(targetSheet) {
     console.error('Initiative Perspective Error:', error);
     throw error;
   }
+}
+
+function generateInitiativePerspective(initiativeKey, initiativeTitle, initiativeDescription, childEpics, perspectiveType) {
+  
+  const epicSummaries = childEpics.map((e, idx) => 
+    `Epic ${idx + 1} (${e.issueKey}): ${e.summary}`
+  ).join('\n');
+  
+  const header = `RETURN RULES (HARD):
+- Return ONLY the summary sentences. No labels, no quotes, no markdown, no extra text.
+- Each sentence ends with exactly one period. No other punctuation used as sentence separators.
+- No colons (:), semicolons (;), or em dashes (—) to chain multiple ideas.
+- No bullet characters (-, •, *). No numbered lists.
+- If insufficient data, return exactly: N/A`;
+
+  let prompt = '';
+  
+  if (perspectiveType === 'Business') {
+    prompt = `${header}
+
+INITIATIVE: ${initiativeTitle}
+Key: ${initiativeKey}
+Description: ${initiativeDescription || 'No description provided'}
+
+CHILD EPICS:
+${epicSummaries}
+
+TASK:
+Synthesize these epic-level details into ONE cohesive initiative-level value proposition.
+
+STYLE RULES:
+- 2-3 sentences, maximum 50 words total. If your response exceeds 50 words, shorten it.
+- Sentence 1: The business problem or opportunity this initiative addresses
+- Sentence 2: What capability is being delivered across the epics
+- Sentence 3 (optional): Expected business outcome or impact
+- SYNTHESIZE across all epics — do not list them individually
+- Start with: "The program..." or "This initiative..."
+- BANNED: "Epic 1", "Epic 2", "This PI will"
+- Use "program" or "feature" instead of "Epic" or "Initiative"`;
+    
+  } else {
+    prompt = `${header}
+
+INITIATIVE: ${initiativeTitle}
+Key: ${initiativeKey}
+Description: ${initiativeDescription || 'No description provided'}
+
+CHILD EPICS:
+${epicSummaries}
+
+TASK:
+Synthesize these epic-level details into ONE cohesive initiative-level technical overview.
+
+STYLE RULES:
+- 2-3 sentences, maximum 50 words total. If your response exceeds 50 words, shorten it.
+- Describe the OVERALL technical approach and key systems involved
+- SYNTHESIZE across all epics — do not list them individually
+- Start with: "The program builds..." or "The system delivers..."
+- BANNED: "Epic 1", "Epic 2", "This PI will"
+- Use "program" or "system" instead of "Epic" or "Initiative"
+- Technical language appropriate for executive audience`;
+  }
+  
+  return callGeminiAPIWithFallback(prompt, 'N/A*');
 }
