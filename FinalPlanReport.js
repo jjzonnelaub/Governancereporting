@@ -657,10 +657,9 @@ function generateValueStreamPresentation(valueStream, piNumber, phase, presentat
           return;
         }
         
-        generateHierarchySlides(presentation, templateSlide, hierarchy, allocationType, phase, valueStream, globalDependencyMap);
+        generateHierarchySlides(presentation, templateSlide, hierarchy, allocationType, phase, valueStream, globalDependencyMap, piCommitmentFilter);
       });
-      
-      // ✅ REMOVE TEMPLATE SLIDE AFTER ALL ALLOCATIONS ARE PROCESSED
+
       try {
         const templateSlide = templateSlides[TEMPLATE_SLIDE_INDEX];
         if (templateSlide) {
@@ -714,8 +713,9 @@ function copyTemplateSlides(templateId, destinationPresentation) {
 // =================================================================================
 // DATA LOADING & STRUCTURING
 // =================================================================================
-function generateHierarchySlides(presentation, templateSlideForDuplication, portfolioHierarchy, allocationType, phase, valueStream, globalDependencyMap) {
+function generateHierarchySlides(presentation, templateSlideForDuplication, portfolioHierarchy, allocationType, phase, valueStream, globalDependencyMap, piCommitmentFilter) {
   globalDependencyMap = globalDependencyMap || {}; // Default to empty if not provided
+  piCommitmentFilter = piCommitmentFilter || 'All'; // Default to 'All' if not provided
   phase = phase || 'FINAL';
   
   console.log(`Generating hierarchy slides for ${allocationType} with ${phase} phase for ${valueStream}...`);
@@ -965,12 +965,18 @@ function generateHierarchySlides(presentation, templateSlideForDuplication, port
                 const commitment = (epic['PI Commitment'] || '').toLowerCase();
                 return commitment.includes('committed');
               })
-              .map(epic => epic['Key']);
-            
+              .map(epic => {
+                if (piCommitmentFilter === 'All') {
+                  const status = (epic['PI Commitment'] || '').trim();
+                  return `${epic['Key']} - ${status || 'Blank'}`;
+                }
+                return epic['Key'];
+              });
+
             let committedEpicsLine = '';
             let committedEpicsStart = -1;
             let committedEpicsKeysStart = -1;
-            
+
             if (committedEpics.length > 0) {
               const epicKeysList = committedEpics.join(', ');
               committedEpicsLine = `Committed: ${epicKeysList}`;
@@ -2553,12 +2559,13 @@ function generateAllValueStreamsPresentation(piNumber, piCommitmentFilter, phase
         const allHierarchies = {
           'Product - Feature': productFeatureHierarchy
         };
-        generateHierarchySlides(presentation, allHierarchies, TEMPLATE_ID, phase, timestamp, sourceSheetName, sourceSheetUrl);
+        generateHierarchySlides(presentation, templateSlides[FINAL_SLIDE_CONFIG.PRODUCT_FEATURE_TEMPLATE_INDEX], productFeatureHierarchy, 'Product - Feature', phase, valueStream, {}, piCommitmentFilter);
         
         processedCount++;
         console.log(`✓ Completed ${valueStream} (${processedCount} value streams processed so far)`);
         
       } catch (vsError) {
+
         console.error(`Error processing ${valueStream}:`, vsError);
         console.error(`Error stack:`, vsError.stack);
         skippedStreams.push(valueStream);
