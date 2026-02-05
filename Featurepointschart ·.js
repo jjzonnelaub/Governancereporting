@@ -173,16 +173,16 @@ function aggregateFeaturePointsByAllocation(sheetName, valueStream) {
     
     console.log(`  Total FP: ${total}`);
     
-    // Colors
+    // Colors - Purple/Gold/Grey palette for professional appearance
     const colorMap = {
-      'Product - Feature': '#6C207F',
-      'Tech / Platform': '#FFC42E',
-      'Infosec': '#1769FC',
-      'Compliance': '#3F68DD',
-      'Product - Compliance': '#3F68DD',
-      'KLO / Quality': '#FFE2C8',
-      'KLO': '#FFE2C8',
-      'Quality': '#A8DADC'
+      'Product - Feature': '#6C207F',      // Purple (dark)
+      'Product - Compliance': '#8B5CA8',   // Purple (medium)
+      'Compliance': '#A77BC2',             // Purple (light)
+      'Infosec': '#C4A8D8',                // Purple (lighter)
+      'Tech / Platform': '#FFC42E',        // Gold (primary)
+      'KLO': '#757575',                    // Grey (medium)
+      'KLO / Quality': '#757575',          // Grey (medium)
+      'Quality': '#9E9E9E'                 // Grey (light)
     };
     
     // ONLY return allocations with FP > 0
